@@ -7,15 +7,23 @@ public sealed class ForecastBatchService : IForecastBatchService
 {
     private readonly IForecastDataStore dataStore;
     private readonly IEnhancedSimilarPatternForecastEngine engine;
+    private readonly IForecastRequestValidator requestValidator;
 
-    public ForecastBatchService(IForecastDataStore dataStore, IEnhancedSimilarPatternForecastEngine engine)
+    public ForecastBatchService(IForecastDataStore dataStore, IEnhancedSimilarPatternForecastEngine engine, IForecastRequestValidator requestValidator)
     {
         this.dataStore = dataStore;
         this.engine = engine;
+        this.requestValidator = requestValidator;
     }
 
     public async Task<BatchForecastResponse> RunBatchAsync(BatchForecastRequest request, CancellationToken cancellationToken)
     {
+        var validation = requestValidator.Validate(request);
+        if (!validation.IsValid)
+        {
+            throw new ArgumentException(string.Join(" ", validation.Errors), nameof(request));
+        }
+
         var run = await dataStore.CreateForecastRunAsync(request, cancellationToken);
         var customers = await dataStore.GetBatchCustomersAsync(request, cancellationToken);
         run.TotalCustomers = customers.Count;

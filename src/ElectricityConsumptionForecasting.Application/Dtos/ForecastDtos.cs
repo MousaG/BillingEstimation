@@ -50,3 +50,8 @@ public sealed record ForecastDashboardSummary(
     int ForecastableCount,
     int ExpertReviewCount,
     decimal AverageConfidence);
+
+public sealed record RequestValidationResult(bool IsValid, IReadOnlyCollection<string> Errors)
+{
+    public static RequestValidationResult Success { get; } = new(true, []);
+}

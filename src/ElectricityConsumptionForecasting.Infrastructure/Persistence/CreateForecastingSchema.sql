@@ -76,6 +76,8 @@ CREATE TABLE ForecastResults (
     RiskLevel nvarchar(32) NOT NULL,
     MethodName nvarchar(64) NOT NULL,
     Reason nvarchar(512) NOT NULL,
+    IsLatest bit NOT NULL,
+    SupersededAt datetime2 NULL,
     CreatedAt datetime2 NOT NULL
 );
 
@@ -129,6 +131,7 @@ CREATE INDEX IX_CustomerMonthlyConsumption_BillIdentifier_Year_Month ON Customer
 CREATE INDEX IX_CustomerMonthlyConsumption_Year_Month_ReadingType_DataQualityStatus ON CustomerMonthlyConsumptions([Year], [Month], ReadingType, DataQualityStatus);
 CREATE INDEX IX_CustomerProfile_CoCode_ClimateType_TariffType_RegionCode_CityCode ON CustomerProfiles(CoCode, ClimateType, TariffType, RegionCode, CityCode);
 CREATE INDEX IX_ForecastResult_BillIdentifier_TargetYear_TargetMonth ON ForecastResults(BillIdentifier, TargetYear, TargetMonth);
+CREATE INDEX IX_ForecastResult_BillIdentifier_TargetYear_TargetMonth_IsLatest ON ForecastResults(BillIdentifier, TargetYear, TargetMonth, IsLatest);
 CREATE INDEX IX_ForecastResult_CoCode_TargetYear_TargetMonth_IsForecastable ON ForecastResults(CoCode, TargetYear, TargetMonth, IsForecastable);
 CREATE INDEX IX_ForecastSimilarSubscriber_ForecastResultId ON ForecastSimilarSubscribers(ForecastResultId);
 CREATE UNIQUE INDEX IX_ForecastConfigs_Name ON ForecastConfigs([Name]);

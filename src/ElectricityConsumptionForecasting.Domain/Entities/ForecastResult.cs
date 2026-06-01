@@ -20,6 +20,8 @@ public sealed class ForecastResult
     public string RiskLevel { get; set; } = "High";
     public string MethodName { get; set; } = "EnhancedSimilarPattern";
     public string Reason { get; set; } = string.Empty;
+    public bool IsLatest { get; set; } = true;
+    public DateTime? SupersededAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public ICollection<ForecastSimilarSubscriber> SimilarSubscribers { get; set; } = [];
     public ICollection<ForecastWarning> Warnings { get; set; } = [];

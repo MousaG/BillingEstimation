@@ -16,6 +16,7 @@ public static class DependencyInjection
 
         services.AddDbContext<ForecastingDbContext>(options => options.UseSqlServer(connectionString));
         services.AddScoped<IForecastDataStore, EfForecastDataStore>();
+        services.AddScoped<IForecastConfigProvider, EfForecastConfigProvider>();
         return services;
     }
 }

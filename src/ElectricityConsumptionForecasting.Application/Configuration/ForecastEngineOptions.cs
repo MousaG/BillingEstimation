@@ -21,4 +21,6 @@ public sealed class ForecastEngineOptions
     public decimal ProfileSimilarityWeight { get; set; } = 0.10m;
     public decimal GeographicSimilarityWeight { get; set; } = 0.10m;
     public decimal MinimumCandidateSimilarity { get; set; } = 0.35m;
+    public decimal ConsumptionBandToleranceRatio { get; set; } = 0.30m;
+    public decimal AmpereToleranceRatio { get; set; } = 0.20m;
 }

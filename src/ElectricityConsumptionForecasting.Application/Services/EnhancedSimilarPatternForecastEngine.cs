@@ -3,7 +3,6 @@ using ElectricityConsumptionForecasting.Application.Dtos;
 using ElectricityConsumptionForecasting.Application.Interfaces;
 using ElectricityConsumptionForecasting.Application.Models;
 using ElectricityConsumptionForecasting.Domain.Entities;
-using Microsoft.Extensions.Options;
 
 namespace ElectricityConsumptionForecasting.Application.Services;
 
@@ -18,7 +17,9 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
     private readonly IGeographicSimilarityService geographicSimilarity;
     private readonly IOutlierDetectionService outlierDetection;
     private readonly IForecastConfidenceService confidenceService;
-    private readonly ForecastEngineOptions options;
+    private readonly ISimilarPatternWindowProvider windowProvider;
+    private readonly IForecastConfigProvider configProvider;
+    private readonly IForecastRequestValidator requestValidator;
 
     public EnhancedSimilarPatternForecastEngine(
         IForecastDataStore dataStore,
@@ -29,7 +30,9 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         IGeographicSimilarityService geographicSimilarity,
         IOutlierDetectionService outlierDetection,
         IForecastConfidenceService confidenceService,
-        IOptions<ForecastEngineOptions> options)
+        ISimilarPatternWindowProvider windowProvider,
+        IForecastConfigProvider configProvider,
+        IForecastRequestValidator requestValidator)
     {
         this.dataStore = dataStore;
         this.consumptionSimilarity = consumptionSimilarity;
@@ -39,11 +42,20 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         this.geographicSimilarity = geographicSimilarity;
         this.outlierDetection = outlierDetection;
         this.confidenceService = confidenceService;
-        this.options = options.Value;
+        this.windowProvider = windowProvider;
+        this.configProvider = configProvider;
+        this.requestValidator = requestValidator;
     }
 
     public async Task<ForecastResponse> ForecastAsync(ForecastCustomerRequest request, long? runId = null, CancellationToken cancellationToken = default)
     {
+        var validation = requestValidator.Validate(request);
+        if (!validation.IsValid)
+        {
+            return NotForecastable(request, string.Join(" ", validation.Errors), "INVALID_REQUEST");
+        }
+
+        var options = await configProvider.GetOptionsAsync(cancellationToken);
         var profile = await dataStore.GetCustomerProfileAsync(request.BillIdentifier, cancellationToken);
         if (profile is null)
         {
@@ -63,28 +75,28 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
             return await SaveAndReturnAsync(NotForecastable(request, "Insufficient valid history", "INSUFFICIENT_HISTORY"), profile, runId, cancellationToken);
         }
 
-        var candidates = await dataStore.GetCandidateProfilesAsync(profile, options.TopNSimilarSubscribers * 5, cancellationToken);
+        var targetAverage = targetHistory.Average(x => x.Consumption);
+        var criteria = new CandidateSelectionCriteria(profile, request.TargetYear, request.TargetMonth, options.MaximumHistoryMonths, targetAverage, options.ConsumptionBandToleranceRatio, options.AmpereToleranceRatio);
+        var candidates = await dataStore.GetCandidateProfilesAsync(criteria, options.TopNSimilarSubscribers * 5, cancellationToken);
         var candidateIds = candidates.Select(x => x.BillIdentifier).ToArray();
         var histories = await dataStore.GetValidHistoryForCustomersAsync(candidateIds, request.TargetYear, request.TargetMonth, options.MaximumHistoryMonths, cancellationToken);
-        var targetConsumptions = await dataStore.GetActualConsumptionForCustomersAsync(candidateIds, request.TargetYear, request.TargetMonth, cancellationToken);
+        var windows = windowProvider.BuildWindows(histories, request.TargetYear, request.TargetMonth, options.MinimumHistoryMonths);
 
         var scored = candidates.Select(candidate =>
             {
-                histories.TryGetValue(candidate.BillIdentifier, out var candidateHistory);
-                targetConsumptions.TryGetValue(candidate.BillIdentifier, out var targetConsumption);
-                if (candidateHistory is null || candidateHistory.Count < options.MinimumHistoryMonths || targetConsumption is null)
+                if (!windows.TryGetValue(candidate.BillIdentifier, out var window) || window.UsedActualForecastTargetMonth)
                 {
                     return null;
                 }
 
-                var consumptionScore = consumptionSimilarity.Calculate(targetHistory, candidateHistory);
-                var trendScore = trendSimilarity.Calculate(targetHistory, candidateHistory);
-                var seasonalScore = seasonalSimilarity.Calculate(targetHistory, candidateHistory, request.TargetMonth);
+                var consumptionScore = consumptionSimilarity.Calculate(targetHistory, window.History);
+                var trendScore = trendSimilarity.Calculate(targetHistory, window.History);
+                var seasonalScore = seasonalSimilarity.Calculate(targetHistory, window.History, request.TargetMonth);
                 var profileScore = profileSimilarity.Calculate(profile, candidate);
                 var geographicScore = geographicSimilarity.Calculate(profile, candidate);
-                var composite = Composite(consumptionScore, trendScore, seasonalScore, profileScore, geographicScore);
+                var composite = Composite(consumptionScore, trendScore, seasonalScore, profileScore, geographicScore, options);
 
-                return new ForecastCandidateScore(candidate.BillIdentifier, composite, consumptionScore, trendScore, seasonalScore, profileScore, geographicScore, targetConsumption.Consumption);
+                return new ForecastCandidateScore(candidate.BillIdentifier, composite, consumptionScore, trendScore, seasonalScore, profileScore, geographicScore, window.ComparableConsumption);
             })
             .Where(x => x is not null && x.SimilarityScore >= options.MinimumCandidateSimilarity)
             .Cast<ForecastCandidateScore>()
@@ -92,13 +104,13 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
             .Take(options.TopNSimilarSubscribers)
             .ToList();
 
-        var minimumSimilar = MinimumSimilarSubscribers(profile.ClimateType);
+        var minimumSimilar = MinimumSimilarSubscribers(profile.ClimateType, options);
         if (scored.Count < minimumSimilar)
         {
             return await SaveAndReturnAsync(NotForecastable(request, "Not enough similar subscribers", "LOW_SIMILAR_COUNT", scored.Count), profile, runId, cancellationToken);
         }
 
-        var outlierResult = outlierDetection.RemoveOutliers(scored);
+        var outlierResult = outlierDetection.RemoveOutliers(scored, options);
         var withoutOutliers = outlierResult.IncludedCandidates;
         var outlierCount = outlierResult.Outliers.Count;
         if (withoutOutliers.Count < minimumSimilar)
@@ -109,9 +121,9 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
 
         var weightTotal = withoutOutliers.Sum(x => Math.Max(x.SimilarityScore, 0.01m));
         var predicted = withoutOutliers.Sum(x => x.TargetMonthConsumption * Math.Max(x.SimilarityScore, 0.01m)) / weightTotal;
-        var confidence = confidenceService.Calculate(withoutOutliers, targetHistory, profile);
-        var level = ConfidenceLevel(confidence);
-        var warnings = ValidatePrediction(targetHistory, predicted);
+        var confidence = confidenceService.Calculate(withoutOutliers, targetHistory, profile, options);
+        var level = ConfidenceLevel(confidence, options);
+        var warnings = ValidatePrediction(targetHistory, predicted, options);
         var requiresReview = confidence < options.MediumConfidenceThreshold || warnings.Any(x => x.Severity == "High");
         var forecastResponse = new ForecastResponse(
             request.BillIdentifier,
@@ -124,7 +136,7 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
             outlierCount,
             "EnhancedSimilarPattern",
             confidence >= options.LowConfidenceThreshold && !warnings.Any(x => x.Severity == "High"),
-            RiskLevel(confidence, warnings),
+            RiskLevel(confidence, warnings, options),
             requiresReview,
             "Similar consumption pattern found in same climate, tariff, phase and consumption band",
             warnings);
@@ -132,22 +144,22 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         return await SaveAndReturnAsync(forecastResponse, profile, runId, cancellationToken, similarCandidates: scored, outliers: outlierResult.Outliers);
     }
 
-    private decimal Composite(decimal consumption, decimal trend, decimal seasonal, decimal profile, decimal geographic) =>
+    private static decimal Composite(decimal consumption, decimal trend, decimal seasonal, decimal profile, decimal geographic, ForecastEngineOptions options) =>
         consumption * options.ConsumptionSimilarityWeight +
         trend * options.TrendSimilarityWeight +
         seasonal * options.SeasonalSimilarityWeight +
         profile * options.ProfileSimilarityWeight +
         geographic * options.GeographicSimilarityWeight;
 
-    private int MinimumSimilarSubscribers(int climateType) =>
+    private static int MinimumSimilarSubscribers(int climateType, ForecastEngineOptions options) =>
         climateType == 2 ? options.MinimumSimilarSubscribersTropical : options.MinimumSimilarSubscribersTemperate;
 
-    private string ConfidenceLevel(decimal confidence) =>
+    private static string ConfidenceLevel(decimal confidence, ForecastEngineOptions options) =>
         confidence >= options.HighConfidenceThreshold ? "High" :
         confidence >= options.MediumConfidenceThreshold ? "Medium" :
         confidence >= options.LowConfidenceThreshold ? "Low" : "VeryLow";
 
-    private string RiskLevel(decimal confidence, IReadOnlyCollection<ForecastWarningDto> warnings)
+    private static string RiskLevel(decimal confidence, IReadOnlyCollection<ForecastWarningDto> warnings, ForecastEngineOptions options)
     {
         if (warnings.Any(x => x.Severity == "High") || confidence < options.LowConfidenceThreshold)
         {
@@ -157,7 +169,7 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         return confidence < options.MediumConfidenceThreshold ? "Medium" : "Low";
     }
 
-    private IReadOnlyCollection<ForecastWarningDto> ValidatePrediction(IReadOnlyList<CustomerMonthlyConsumption> history, decimal predicted)
+    private static IReadOnlyCollection<ForecastWarningDto> ValidatePrediction(IReadOnlyList<CustomerMonthlyConsumption> history, decimal predicted, ForecastEngineOptions options)
     {
         var warnings = new List<ForecastWarningDto>();
         var last = history.OrderByDescending(x => x.Year).ThenByDescending(x => x.Month).FirstOrDefault();

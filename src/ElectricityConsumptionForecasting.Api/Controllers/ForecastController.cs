@@ -11,28 +11,27 @@ public sealed class ForecastController : ControllerBase
     private readonly IEnhancedSimilarPatternForecastEngine forecastEngine;
     private readonly IForecastBatchService batchService;
     private readonly IForecastQueryService queryService;
+    private readonly IForecastRequestValidator requestValidator;
 
     public ForecastController(
         IEnhancedSimilarPatternForecastEngine forecastEngine,
         IForecastBatchService batchService,
-        IForecastQueryService queryService)
+        IForecastQueryService queryService,
+        IForecastRequestValidator requestValidator)
     {
         this.forecastEngine = forecastEngine;
         this.batchService = batchService;
         this.queryService = queryService;
+        this.requestValidator = requestValidator;
     }
 
     [HttpPost("customer")]
     public async Task<ActionResult<ForecastResponse>> ForecastCustomer([FromBody] ForecastCustomerRequest request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.BillIdentifier))
+        var validation = requestValidator.Validate(request);
+        if (!validation.IsValid)
         {
-            return BadRequest(new { error = "BillIdentifier is required." });
-        }
-
-        if (request.TargetMonth is < 1 or > 12)
-        {
-            return BadRequest(new { error = "TargetMonth must be between 1 and 12." });
+            return BadRequest(new { errors = validation.Errors });
         }
 
         return Ok(await forecastEngine.ForecastAsync(request, cancellationToken: cancellationToken));
@@ -41,14 +40,10 @@ public sealed class ForecastController : ControllerBase
     [HttpPost("run-batch")]
     public async Task<ActionResult<BatchForecastResponse>> RunBatch([FromBody] BatchForecastRequest request, CancellationToken cancellationToken)
     {
-        if (request.TargetMonth is < 1 or > 12)
+        var validation = requestValidator.Validate(request);
+        if (!validation.IsValid)
         {
-            return BadRequest(new { error = "TargetMonth must be between 1 and 12." });
-        }
-
-        if (request.MaxCustomers < 1)
-        {
-            return BadRequest(new { error = "MaxCustomers must be greater than zero." });
+            return BadRequest(new { errors = validation.Errors });
         }
 
         return Ok(await batchService.RunBatchAsync(request, cancellationToken));

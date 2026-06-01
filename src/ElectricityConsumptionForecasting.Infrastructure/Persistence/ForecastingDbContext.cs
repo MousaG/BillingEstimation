@@ -58,6 +58,7 @@ public sealed class ForecastingDbContext : DbContext
         {
             entity.HasKey(x => x.Id);
             entity.HasIndex(x => new { x.BillIdentifier, x.TargetYear, x.TargetMonth });
+            entity.HasIndex(x => new { x.BillIdentifier, x.TargetYear, x.TargetMonth, x.IsLatest });
             entity.HasIndex(x => new { x.CoCode, x.TargetYear, x.TargetMonth, x.IsForecastable });
             entity.Property(x => x.BillIdentifier).HasMaxLength(32).IsRequired();
             entity.Property(x => x.PredictedConsumption).HasPrecision(18, 3);

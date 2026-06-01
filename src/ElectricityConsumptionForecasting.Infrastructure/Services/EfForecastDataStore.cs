@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ElectricityConsumptionForecasting.Application.Dtos;
 using ElectricityConsumptionForecasting.Application.Interfaces;
+using ElectricityConsumptionForecasting.Application.Models;
 using ElectricityConsumptionForecasting.Domain.Entities;
 using ElectricityConsumptionForecasting.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -38,10 +39,33 @@ public sealed class EfForecastDataStore : IForecastDataStore
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<IReadOnlyList<CustomerProfile>> GetCandidateProfilesAsync(CustomerProfile targetProfile, int maxCandidates, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<CustomerProfile>> GetCandidateProfilesAsync(CandidateSelectionCriteria criteria, int maxCandidates, CancellationToken cancellationToken)
     {
+        var targetProfile = criteria.TargetProfile;
+        var targetAverage = criteria.TargetRecentAverageConsumption;
+        var lowerConsumption = targetAverage * (1m - criteria.ConsumptionBandToleranceRatio);
+        var upperConsumption = targetAverage * (1m + criteria.ConsumptionBandToleranceRatio);
+        var lowerAmpere = targetProfile.Ampere * (1m - criteria.AmpereToleranceRatio);
+        var upperAmpere = targetProfile.Ampere * (1m + criteria.AmpereToleranceRatio);
+        var minHistoryKey = ToMonthKey(criteria.TargetYear, criteria.TargetMonth) - criteria.MaximumHistoryMonths;
+        var maxHistoryKey = ToMonthKey(criteria.TargetYear, criteria.TargetMonth) - 1;
+
+        var recentAverages = ValidConsumptions()
+            .Where(x => x.Year * 12 + x.Month >= minHistoryKey && x.Year * 12 + x.Month <= maxHistoryKey)
+            .GroupBy(x => x.BillIdentifier)
+            .Select(g => new { BillIdentifier = g.Key, AverageConsumption = g.Average(x => x.Consumption) });
+
         return await dbContext.CustomerProfiles.AsNoTracking()
-            .Where(x => x.BillIdentifier != targetProfile.BillIdentifier)
+            .Join(recentAverages, profile => profile.BillIdentifier, average => average.BillIdentifier, (profile, average) => new { Profile = profile, average.AverageConsumption })
+            .Where(x => x.Profile.BillIdentifier != targetProfile.BillIdentifier)
+            .Where(x => x.AverageConsumption >= lowerConsumption && x.AverageConsumption <= upperConsumption)
+            .Where(x => x.Profile.CoCode == targetProfile.CoCode)
+            .Where(x => x.Profile.RegionCode == targetProfile.RegionCode)
+            .Where(x => !targetProfile.CityCode.HasValue || x.Profile.CityCode == targetProfile.CityCode)
+            .Where(x => x.Profile.Phase == targetProfile.Phase)
+            .Where(x => x.Profile.Ampere >= lowerAmpere && x.Profile.Ampere <= upperAmpere)
+            .Where(x => x.Profile.MeterType == targetProfile.MeterType)
+            .Select(x => x.Profile)
             .Where(x => x.ActivityStatus == "Active")
             .Where(x => x.ClimateType == targetProfile.ClimateType && x.TariffType == targetProfile.TariffType)
             .OrderByDescending(x => x.CityCode == targetProfile.CityCode)
@@ -65,18 +89,24 @@ public sealed class EfForecastDataStore : IForecastDataStore
             .ToDictionary(g => g.Key, g => (IReadOnlyList<CustomerMonthlyConsumption>)g.OrderBy(x => x.Year).ThenBy(x => x.Month).ToList());
     }
 
-    public async Task<IReadOnlyDictionary<string, CustomerMonthlyConsumption>> GetActualConsumptionForCustomersAsync(IEnumerable<string> billIdentifiers, int year, int month, CancellationToken cancellationToken)
-    {
-        var ids = billIdentifiers.Distinct().ToArray();
-        var rows = await ValidConsumptions()
-            .Where(x => ids.Contains(x.BillIdentifier) && x.Year == year && x.Month == month && (x.IsActualReading || x.IsSmartReading))
-            .ToListAsync(cancellationToken);
-
-        return rows.GroupBy(x => x.BillIdentifier).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.IsSmartReading).First());
-    }
-
     public async Task SaveForecastResultAsync(ForecastResult result, CancellationToken cancellationToken)
     {
+        var now = DateTime.UtcNow;
+        var currentLatest = await dbContext.ForecastResults
+            .Where(x =>
+                x.BillIdentifier == result.BillIdentifier &&
+                x.TargetYear == result.TargetYear &&
+                x.TargetMonth == result.TargetMonth &&
+                x.IsLatest)
+            .ToListAsync(cancellationToken);
+
+        foreach (var previous in currentLatest)
+        {
+            previous.IsLatest = false;
+            previous.SupersededAt = now;
+        }
+
+        result.IsLatest = true;
         dbContext.ForecastResults.Add(result);
         await dbContext.SaveChangesAsync(cancellationToken);
     }
@@ -85,7 +115,7 @@ public sealed class EfForecastDataStore : IForecastDataStore
         dbContext.ForecastResults.AsNoTracking()
             .Include(x => x.Warnings)
             .OrderByDescending(x => x.CreatedAt)
-            .FirstOrDefaultAsync(x => x.BillIdentifier == billIdentifier && x.TargetYear == year && x.TargetMonth == month, cancellationToken);
+            .FirstOrDefaultAsync(x => x.BillIdentifier == billIdentifier && x.TargetYear == year && x.TargetMonth == month && x.IsLatest, cancellationToken);
 
     public async Task<IReadOnlyList<CustomerProfile>> GetBatchCustomersAsync(BatchForecastRequest request, CancellationToken cancellationToken)
     {
@@ -121,7 +151,7 @@ public sealed class EfForecastDataStore : IForecastDataStore
 
     public async Task<ForecastDashboardSummary> GetDashboardSummaryAsync(int coCode, int year, int month, CancellationToken cancellationToken)
     {
-        var query = dbContext.ForecastResults.AsNoTracking().Where(x => x.CoCode == coCode && x.TargetYear == year && x.TargetMonth == month);
+        var query = dbContext.ForecastResults.AsNoTracking().Where(x => x.CoCode == coCode && x.TargetYear == year && x.TargetMonth == month && x.IsLatest);
         var total = await query.CountAsync(cancellationToken);
         if (total == 0)
         {
@@ -137,6 +167,11 @@ public sealed class EfForecastDataStore : IForecastDataStore
             await query.CountAsync(x => x.RequiresExpertReview, cancellationToken),
             await query.AverageAsync(x => x.Confidence, cancellationToken));
     }
+
+    public async Task<IReadOnlyDictionary<string, string>> GetActiveForecastConfigValuesAsync(CancellationToken cancellationToken) =>
+        await dbContext.ForecastConfigs.AsNoTracking()
+            .Where(x => x.IsActive)
+            .ToDictionaryAsync(x => x.Name, x => x.Value, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
     private IQueryable<CustomerMonthlyConsumption> ValidConsumptions() =>
         dbContext.CustomerMonthlyConsumptions.AsNoTracking()

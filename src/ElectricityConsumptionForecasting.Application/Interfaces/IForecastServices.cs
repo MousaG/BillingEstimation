@@ -1,3 +1,4 @@
+using ElectricityConsumptionForecasting.Application.Configuration;
 using ElectricityConsumptionForecasting.Application.Dtos;
 using ElectricityConsumptionForecasting.Application.Models;
 using ElectricityConsumptionForecasting.Domain.Entities;
@@ -26,13 +27,36 @@ public interface IForecastQueryService
 /// <summary>Removes abnormal candidate readings while keeping the algorithm open for future detectors.</summary>
 public interface IOutlierDetectionService
 {
-    OutlierDetectionResult RemoveOutliers(IReadOnlyList<ForecastCandidateScore> candidates);
+    OutlierDetectionResult RemoveOutliers(IReadOnlyList<ForecastCandidateScore> candidates, ForecastEngineOptions options);
 }
 
 /// <summary>Calculates confidence for a forecast from selected candidates and target data completeness.</summary>
 public interface IForecastConfidenceService
 {
-    decimal Calculate(IReadOnlyList<ForecastCandidateScore> candidates, IReadOnlyList<CustomerMonthlyConsumption> targetHistory, CustomerProfile targetProfile);
+    decimal Calculate(IReadOnlyList<ForecastCandidateScore> candidates, IReadOnlyList<CustomerMonthlyConsumption> targetHistory, CustomerProfile targetProfile, ForecastEngineOptions options);
+}
+
+/// <summary>Builds historical similar-pattern windows without leaking unavailable target-month readings.</summary>
+public interface ISimilarPatternWindowProvider
+{
+    IReadOnlyDictionary<string, SimilarPatternWindow> BuildWindows(
+        IReadOnlyDictionary<string, IReadOnlyList<CustomerMonthlyConsumption>> candidateHistories,
+        int targetYear,
+        int targetMonth,
+        int minimumHistoryMonths);
+}
+
+/// <summary>Loads effective forecasting configuration from the database with appsettings defaults as fallback.</summary>
+public interface IForecastConfigProvider
+{
+    Task<ForecastEngineOptions> GetOptionsAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>Validates API and application forecast requests.</summary>
+public interface IForecastRequestValidator
+{
+    RequestValidationResult Validate(ForecastCustomerRequest request);
+    RequestValidationResult Validate(BatchForecastRequest request);
 }
 
 public sealed record OutlierDetectionResult(
