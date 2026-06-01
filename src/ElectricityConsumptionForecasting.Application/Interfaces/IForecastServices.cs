@@ -46,10 +46,23 @@ public interface ISimilarPatternWindowProvider
         int minimumHistoryMonths);
 }
 
+/// <summary>Scores seasonal agreement using the candidate window's comparable month.</summary>
+public interface IComparableMonthSeasonalityService
+{
+    decimal Calculate(IReadOnlyList<CustomerMonthlyConsumption> targetHistory, SimilarPatternWindow candidateWindow);
+}
+
 /// <summary>Loads effective forecasting configuration from the database with appsettings defaults as fallback.</summary>
 public interface IForecastConfigProvider
 {
     Task<ForecastEngineOptions> GetOptionsAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>Builds and stores recent consumption features used for fast candidate selection.</summary>
+public interface ICustomerRecentConsumptionFeatureService
+{
+    CustomerRecentConsumptionFeature BuildFeature(CustomerProfile profile, IReadOnlyList<CustomerMonthlyConsumption> history, int featureYear, int featureMonth);
+    Task<int> RebuildFeaturesAsync(int coCode, int featureYear, int featureMonth, int maximumCustomers, CancellationToken cancellationToken);
 }
 
 /// <summary>Validates API and application forecast requests.</summary>

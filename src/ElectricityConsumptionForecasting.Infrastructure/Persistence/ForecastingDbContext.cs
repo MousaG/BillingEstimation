@@ -17,6 +17,7 @@ public sealed class ForecastingDbContext : DbContext
     public DbSet<ForecastWarning> ForecastWarnings => Set<ForecastWarning>();
     public DbSet<ForecastConfig> ForecastConfigs => Set<ForecastConfig>();
     public DbSet<CustomerDataQualityIssue> CustomerDataQualityIssues => Set<CustomerDataQualityIssue>();
+    public DbSet<CustomerRecentConsumptionFeature> CustomerRecentConsumptionFeatures => Set<CustomerRecentConsumptionFeature>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -112,6 +113,22 @@ public sealed class ForecastingDbContext : DbContext
             entity.Property(x => x.IssueCode).HasMaxLength(64).IsRequired();
             entity.Property(x => x.IssueDescription).HasMaxLength(512).IsRequired();
             entity.Property(x => x.Severity).HasMaxLength(32).IsRequired();
+        });
+
+        modelBuilder.Entity<CustomerRecentConsumptionFeature>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.BillIdentifier, x.FeatureYear, x.FeatureMonth }).IsUnique();
+            entity.HasIndex(x => new { x.FeatureYear, x.FeatureMonth, x.CoCode, x.ClimateType, x.TariffType, x.RegionCode, x.CityCode, x.ConsumptionBand });
+            entity.HasIndex(x => new { x.FeatureYear, x.FeatureMonth, x.CoCode, x.ClimateType, x.TariffType, x.Phase, x.MeterType });
+            entity.Property(x => x.BillIdentifier).HasMaxLength(32).IsRequired();
+            entity.Property(x => x.Ampere).HasPrecision(10, 2);
+            entity.Property(x => x.RecentAverageConsumption).HasPrecision(18, 3);
+            entity.Property(x => x.RecentMinimumConsumption).HasPrecision(18, 3);
+            entity.Property(x => x.RecentMaximumConsumption).HasPrecision(18, 3);
+            entity.Property(x => x.RecentStdDevConsumption).HasPrecision(18, 3);
+            entity.Property(x => x.LastConsumption).HasPrecision(18, 3);
+            entity.Property(x => x.TrendSlope).HasPrecision(18, 6);
         });
     }
 }

@@ -23,4 +23,5 @@ public sealed class ForecastEngineOptions
     public decimal MinimumCandidateSimilarity { get; set; } = 0.35m;
     public decimal ConsumptionBandToleranceRatio { get; set; } = 0.30m;
     public decimal AmpereToleranceRatio { get; set; } = 0.20m;
+    public int MaxBatchCustomersLimit { get; set; } = 100000;
 }

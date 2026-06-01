@@ -11,7 +11,7 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
 {
     private readonly IForecastDataStore dataStore;
     private readonly IPositionalWindowSimilarityService positionalWindowSimilarity;
-    private readonly ISeasonalSimilarityService seasonalSimilarity;
+    private readonly IComparableMonthSeasonalityService seasonalityService;
     private readonly IProfileSimilarityService profileSimilarity;
     private readonly IGeographicSimilarityService geographicSimilarity;
     private readonly IOutlierDetectionService outlierDetection;
@@ -23,7 +23,7 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
     public EnhancedSimilarPatternForecastEngine(
         IForecastDataStore dataStore,
         IPositionalWindowSimilarityService positionalWindowSimilarity,
-        ISeasonalSimilarityService seasonalSimilarity,
+        IComparableMonthSeasonalityService seasonalityService,
         IProfileSimilarityService profileSimilarity,
         IGeographicSimilarityService geographicSimilarity,
         IOutlierDetectionService outlierDetection,
@@ -34,7 +34,7 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
     {
         this.dataStore = dataStore;
         this.positionalWindowSimilarity = positionalWindowSimilarity;
-        this.seasonalSimilarity = seasonalSimilarity;
+        this.seasonalityService = seasonalityService;
         this.profileSimilarity = profileSimilarity;
         this.geographicSimilarity = geographicSimilarity;
         this.outlierDetection = outlierDetection;
@@ -95,7 +95,7 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
                 var positionalScore = positionalWindowSimilarity.Calculate(comparableTargetHistory, window.History);
                 var consumptionScore = positionalScore.ConsumptionSimilarity;
                 var trendScore = positionalScore.TrendSimilarity;
-                var seasonalScore = seasonalSimilarity.Calculate(comparableTargetHistory, window.History, request.TargetMonth);
+                var seasonalScore = seasonalityService.Calculate(comparableTargetHistory, window);
                 var profileScore = profileSimilarity.Calculate(profile, candidate);
                 var geographicScore = geographicSimilarity.Calculate(profile, candidate);
                 var composite = Composite(consumptionScore, trendScore, seasonalScore, profileScore, geographicScore, options);

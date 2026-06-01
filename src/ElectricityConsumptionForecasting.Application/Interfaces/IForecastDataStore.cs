@@ -19,4 +19,6 @@ public interface IForecastDataStore
     Task UpdateForecastRunAsync(ForecastRun run, CancellationToken cancellationToken);
     Task<ForecastDashboardSummary> GetDashboardSummaryAsync(int coCode, int year, int month, CancellationToken cancellationToken);
     Task<IReadOnlyDictionary<string, string>> GetActiveForecastConfigValuesAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<CustomerProfile>> GetFeatureBuildCustomersAsync(int coCode, int maximumCustomers, CancellationToken cancellationToken);
+    Task UpsertCustomerRecentConsumptionFeatureAsync(CustomerRecentConsumptionFeature feature, CancellationToken cancellationToken);
 }

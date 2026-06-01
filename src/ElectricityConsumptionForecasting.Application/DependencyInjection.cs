@@ -15,13 +15,15 @@ public static class DependencyInjection
         services.AddScoped<IPositionalWindowSimilarityService, PositionalWindowSimilarityService>();
         services.AddScoped<ITrendSimilarityService, TrendSimilarityService>();
         services.AddScoped<ISeasonalSimilarityService, SeasonalSimilarityService>();
+        services.AddScoped<IComparableMonthSeasonalityService, ComparableMonthSeasonalityService>();
         services.AddScoped<IProfileSimilarityService, ProfileSimilarityService>();
         services.AddScoped<IGeographicSimilarityService, GeographicSimilarityService>();
         services.AddScoped<IOutlierDetectionService, IqrOutlierDetectionService>();
         services.AddScoped<IForecastConfidenceService, ForecastConfidenceService>();
         services.AddScoped<ISimilarPatternWindowProvider, SimilarPatternWindowProvider>();
+        services.AddScoped<ICustomerRecentConsumptionFeatureService, CustomerRecentConsumptionFeatureService>();
         services.AddScoped<IForecastConfigProvider, AppSettingsForecastConfigProvider>();
-        services.AddSingleton<IForecastRequestValidator, ForecastRequestValidator>();
+        services.AddScoped<IForecastRequestValidator, ForecastRequestValidator>();
         services.AddScoped<IEnhancedSimilarPatternForecastEngine, EnhancedSimilarPatternForecastEngine>();
         services.AddScoped<IForecastBatchService, ForecastBatchService>();
         services.AddScoped<IForecastQueryService, ForecastQueryService>();

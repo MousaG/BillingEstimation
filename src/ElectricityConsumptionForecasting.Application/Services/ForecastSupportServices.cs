@@ -153,6 +153,126 @@ public sealed class SimilarPatternWindowProvider : ISimilarPatternWindowProvider
     private static int ToMonthKey(int year, int month) => year * 12 + month;
 }
 
+public sealed class ComparableMonthSeasonalityService : IComparableMonthSeasonalityService
+{
+    public decimal Calculate(IReadOnlyList<CustomerMonthlyConsumption> targetHistory, SimilarPatternWindow candidateWindow)
+    {
+        var targetSameMonth = targetHistory
+            .Where(x => x.Month == candidateWindow.ComparableMonth)
+            .OrderByDescending(x => x.Year)
+            .ThenByDescending(x => x.Month)
+            .FirstOrDefault();
+        if (targetSameMonth is null)
+        {
+            return 0.5m;
+        }
+
+        var denominator = Math.Max(Math.Abs(targetSameMonth.Consumption), 1m);
+        return ConsumptionSimilarityService.Clamp01(1m - Math.Min(Math.Abs(targetSameMonth.Consumption - candidateWindow.ComparableConsumption) / denominator, 1m));
+    }
+}
+
+public sealed class CustomerRecentConsumptionFeatureService : ICustomerRecentConsumptionFeatureService
+{
+    private readonly IForecastDataStore dataStore;
+    private readonly IForecastConfigProvider configProvider;
+
+    public CustomerRecentConsumptionFeatureService(IForecastDataStore dataStore, IForecastConfigProvider configProvider)
+    {
+        this.dataStore = dataStore;
+        this.configProvider = configProvider;
+    }
+
+    public CustomerRecentConsumptionFeature BuildFeature(CustomerProfile profile, IReadOnlyList<CustomerMonthlyConsumption> history, int featureYear, int featureMonth)
+    {
+        var ordered = history.OrderBy(x => x.Year).ThenBy(x => x.Month).ToList();
+        var consumptions = ordered.Select(x => x.Consumption).ToList();
+        var average = consumptions.Count == 0 ? 0m : consumptions.Average();
+        var variance = consumptions.Count == 0 ? 0m : consumptions.Average(x => (x - average) * (x - average));
+        var now = DateTime.UtcNow;
+
+        return new CustomerRecentConsumptionFeature
+        {
+            BillIdentifier = profile.BillIdentifier,
+            FeatureYear = featureYear,
+            FeatureMonth = featureMonth,
+            CoCode = profile.CoCode,
+            RegionCode = profile.RegionCode,
+            CityCode = profile.CityCode,
+            TariffType = profile.TariffType,
+            ClimateType = profile.ClimateType,
+            Phase = profile.Phase,
+            Ampere = profile.Ampere,
+            MeterType = profile.MeterType,
+            ValidMonthsCount = consumptions.Count,
+            RecentAverageConsumption = average,
+            RecentMinimumConsumption = consumptions.Count == 0 ? 0m : consumptions.Min(),
+            RecentMaximumConsumption = consumptions.Count == 0 ? 0m : consumptions.Max(),
+            RecentStdDevConsumption = (decimal)Math.Sqrt((double)variance),
+            LastConsumption = consumptions.Count == 0 ? 0m : consumptions[^1],
+            TrendSlope = CalculateTrendSlope(consumptions),
+            ConsumptionBand = CalculateConsumptionBand(average),
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+    }
+
+    public async Task<int> RebuildFeaturesAsync(int coCode, int featureYear, int featureMonth, int maximumCustomers, CancellationToken cancellationToken)
+    {
+        var options = await configProvider.GetOptionsAsync(cancellationToken);
+        var customers = await dataStore.GetFeatureBuildCustomersAsync(coCode, Math.Min(maximumCustomers, options.MaxBatchCustomersLimit), cancellationToken);
+        var count = 0;
+        foreach (var customer in customers)
+        {
+            var history = await dataStore.GetValidHistoryAsync(customer.BillIdentifier, featureYear, featureMonth, options.MaximumHistoryMonths, cancellationToken);
+            if (history.Count < options.MinimumHistoryMonths)
+            {
+                continue;
+            }
+
+            await dataStore.UpsertCustomerRecentConsumptionFeatureAsync(BuildFeature(customer, history, featureYear, featureMonth), cancellationToken);
+            count++;
+        }
+
+        return count;
+    }
+
+    private static decimal CalculateTrendSlope(IReadOnlyList<decimal> consumptions)
+    {
+        if (consumptions.Count < 2)
+        {
+            return 0m;
+        }
+
+        return (consumptions[^1] - consumptions[0]) / (consumptions.Count - 1);
+    }
+
+    private static int CalculateConsumptionBand(decimal averageConsumption)
+    {
+        if (averageConsumption < 100m)
+        {
+            return 1;
+        }
+
+        if (averageConsumption < 200m)
+        {
+            return 2;
+        }
+
+        if (averageConsumption < 400m)
+        {
+            return 3;
+        }
+
+        if (averageConsumption < 800m)
+        {
+            return 4;
+        }
+
+        return 5;
+    }
+}
+
 public sealed class AppSettingsForecastConfigProvider : IForecastConfigProvider
 {
     private readonly IOptions<ForecastEngineOptions> options;
@@ -182,12 +302,19 @@ public sealed class AppSettingsForecastConfigProvider : IForecastConfigProvider
         GeographicSimilarityWeight = source.GeographicSimilarityWeight,
         MinimumCandidateSimilarity = source.MinimumCandidateSimilarity,
         ConsumptionBandToleranceRatio = source.ConsumptionBandToleranceRatio,
-        AmpereToleranceRatio = source.AmpereToleranceRatio
+        AmpereToleranceRatio = source.AmpereToleranceRatio,
+        MaxBatchCustomersLimit = source.MaxBatchCustomersLimit
     };
 }
 
 public sealed class ForecastRequestValidator : IForecastRequestValidator
 {
+    private readonly ForecastEngineOptions options;
+
+    public ForecastRequestValidator() => options = new ForecastEngineOptions();
+
+    public ForecastRequestValidator(IOptions<ForecastEngineOptions> options) => this.options = options.Value;
+
     public RequestValidationResult Validate(ForecastCustomerRequest request)
     {
         var errors = new List<string>();
@@ -216,6 +343,10 @@ public sealed class ForecastRequestValidator : IForecastRequestValidator
         if (request.MaxCustomers <= 0)
         {
             errors.Add("MaxCustomers must be greater than zero.");
+        }
+        else if (request.MaxCustomers > options.MaxBatchCustomersLimit)
+        {
+            errors.Add($"MaxCustomers must be less than or equal to {options.MaxBatchCustomersLimit}.");
         }
 
         ValidateYearMonth(request.TargetYear, request.TargetMonth, errors);

@@ -47,22 +47,18 @@ public sealed class EfForecastDataStore : IForecastDataStore
         var upperConsumption = targetAverage * (1m + criteria.ConsumptionBandToleranceRatio);
         var lowerAmpere = targetProfile.Ampere * (1m - criteria.AmpereToleranceRatio);
         var upperAmpere = targetProfile.Ampere * (1m + criteria.AmpereToleranceRatio);
-        var minHistoryKey = ToMonthKey(criteria.TargetYear, criteria.TargetMonth) - criteria.MaximumHistoryMonths;
-        var maxHistoryKey = ToMonthKey(criteria.TargetYear, criteria.TargetMonth) - 1;
-
-        var recentAverages = ValidConsumptions()
-            .Where(x => x.Year * 12 + x.Month >= minHistoryKey && x.Year * 12 + x.Month <= maxHistoryKey)
-            .GroupBy(x => x.BillIdentifier)
-            .Select(g => new { BillIdentifier = g.Key, AverageConsumption = g.Average(x => x.Consumption) });
-
-        var baseQuery = dbContext.CustomerProfiles.AsNoTracking()
-            .Join(recentAverages, profile => profile.BillIdentifier, average => average.BillIdentifier, (profile, average) => new { Profile = profile, average.AverageConsumption })
-            .Where(x => x.Profile.BillIdentifier != targetProfile.BillIdentifier)
-            .Where(x => x.AverageConsumption >= lowerConsumption && x.AverageConsumption <= upperConsumption)
-            .Where(x => x.Profile.CoCode == targetProfile.CoCode)
-            .Where(x => x.Profile.Phase == targetProfile.Phase)
-            .Where(x => x.Profile.Ampere >= lowerAmpere && x.Profile.Ampere <= upperAmpere)
-            .Where(x => x.Profile.MeterType == targetProfile.MeterType)
+        var targetBand = CalculateConsumptionBand(targetAverage);
+        var baseQuery = dbContext.CustomerRecentConsumptionFeatures.AsNoTracking()
+            .Where(x => x.FeatureYear == criteria.TargetYear && x.FeatureMonth == criteria.TargetMonth)
+            .Where(x => x.BillIdentifier != targetProfile.BillIdentifier)
+            .Where(x => x.RecentAverageConsumption >= lowerConsumption && x.RecentAverageConsumption <= upperConsumption)
+            .Where(x => x.ConsumptionBand >= targetBand - 1 && x.ConsumptionBand <= targetBand + 1)
+            .Where(x => x.CoCode == targetProfile.CoCode)
+            .Where(x => x.Phase == targetProfile.Phase)
+            .Where(x => x.Ampere >= lowerAmpere && x.Ampere <= upperAmpere)
+            .Where(x => x.MeterType == targetProfile.MeterType)
+            .Where(x => x.ClimateType == targetProfile.ClimateType && x.TariffType == targetProfile.TariffType)
+            .Join(dbContext.CustomerProfiles.AsNoTracking(), feature => feature.BillIdentifier, profile => profile.BillIdentifier, (feature, profile) => new { Feature = feature, Profile = profile })
             .Select(x => x.Profile)
             .Where(x => x.ActivityStatus == "Active")
             .Where(x => x.ClimateType == targetProfile.ClimateType && x.TariffType == targetProfile.TariffType);
@@ -221,6 +217,48 @@ public sealed class EfForecastDataStore : IForecastDataStore
             .Where(x => x.IsActive)
             .ToDictionaryAsync(x => x.Name, x => x.Value, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
+    public async Task<IReadOnlyList<CustomerProfile>> GetFeatureBuildCustomersAsync(int coCode, int maximumCustomers, CancellationToken cancellationToken) =>
+        await dbContext.CustomerProfiles.AsNoTracking()
+            .Where(x => x.CoCode == coCode && x.ActivityStatus == "Active")
+            .Take(maximumCustomers)
+            .ToListAsync(cancellationToken);
+
+    public async Task UpsertCustomerRecentConsumptionFeatureAsync(CustomerRecentConsumptionFeature feature, CancellationToken cancellationToken)
+    {
+        var existing = await dbContext.CustomerRecentConsumptionFeatures
+            .FirstOrDefaultAsync(x =>
+                x.BillIdentifier == feature.BillIdentifier &&
+                x.FeatureYear == feature.FeatureYear &&
+                x.FeatureMonth == feature.FeatureMonth,
+                cancellationToken);
+        if (existing is null)
+        {
+            dbContext.CustomerRecentConsumptionFeatures.Add(feature);
+        }
+        else
+        {
+            existing.CoCode = feature.CoCode;
+            existing.RegionCode = feature.RegionCode;
+            existing.CityCode = feature.CityCode;
+            existing.TariffType = feature.TariffType;
+            existing.ClimateType = feature.ClimateType;
+            existing.Phase = feature.Phase;
+            existing.Ampere = feature.Ampere;
+            existing.MeterType = feature.MeterType;
+            existing.ValidMonthsCount = feature.ValidMonthsCount;
+            existing.RecentAverageConsumption = feature.RecentAverageConsumption;
+            existing.RecentMinimumConsumption = feature.RecentMinimumConsumption;
+            existing.RecentMaximumConsumption = feature.RecentMaximumConsumption;
+            existing.RecentStdDevConsumption = feature.RecentStdDevConsumption;
+            existing.LastConsumption = feature.LastConsumption;
+            existing.TrendSlope = feature.TrendSlope;
+            existing.ConsumptionBand = feature.ConsumptionBand;
+            existing.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
     private IQueryable<CustomerMonthlyConsumption> ValidConsumptions() =>
         dbContext.CustomerMonthlyConsumptions.AsNoTracking()
             .Where(x => !x.HasCorrection && !x.HasMeterChange && x.DataQualityStatus == "Valid")
@@ -231,4 +269,29 @@ public sealed class EfForecastDataStore : IForecastDataStore
                 issue.Severity == "Severe"));
 
     private static int ToMonthKey(int year, int month) => year * 12 + month;
+
+    private static int CalculateConsumptionBand(decimal averageConsumption)
+    {
+        if (averageConsumption < 100m)
+        {
+            return 1;
+        }
+
+        if (averageConsumption < 200m)
+        {
+            return 2;
+        }
+
+        if (averageConsumption < 400m)
+        {
+            return 3;
+        }
+
+        if (averageConsumption < 800m)
+        {
+            return 4;
+        }
+
+        return 5;
+    }
 }
