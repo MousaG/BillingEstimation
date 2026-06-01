@@ -12,6 +12,7 @@ public static class DependencyInjection
     {
         services.Configure<ForecastEngineOptions>(configuration.GetSection(ForecastEngineOptions.SectionName));
         services.AddScoped<IConsumptionSimilarityService, ConsumptionSimilarityService>();
+        services.AddScoped<IPositionalWindowSimilarityService, PositionalWindowSimilarityService>();
         services.AddScoped<ITrendSimilarityService, TrendSimilarityService>();
         services.AddScoped<ISeasonalSimilarityService, SeasonalSimilarityService>();
         services.AddScoped<IProfileSimilarityService, ProfileSimilarityService>();

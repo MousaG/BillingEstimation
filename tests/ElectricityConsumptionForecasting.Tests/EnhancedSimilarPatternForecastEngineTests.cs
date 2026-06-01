@@ -104,6 +104,32 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
     }
 
     [Fact]
+    public void Positional_window_similarity_is_high_for_same_shape_from_different_year()
+    {
+        var service = new PositionalWindowSimilarityService();
+        var target = Window("target", 1403, 4, [100m, 120m, 140m, 160m]);
+        var candidate = Window("candidate", 1401, 9, [100m, 120m, 140m, 160m]);
+
+        var score = service.Calculate(target, candidate);
+
+        Assert.True(score.ConsumptionSimilarity > 0.95m);
+        Assert.True(score.TrendSimilarity > 0.95m);
+    }
+
+    [Fact]
+    public void Positional_window_similarity_is_low_for_opposite_level_and_shape()
+    {
+        var service = new PositionalWindowSimilarityService();
+        var target = Window("target", 1403, 4, [100m, 120m, 140m, 160m]);
+        var candidate = Window("candidate", 1401, 9, [300m, 280m, 260m, 240m]);
+
+        var score = service.Calculate(target, candidate);
+
+        Assert.True(score.ConsumptionSimilarity < 0.20m);
+        Assert.True(score.TrendSimilarity < 0.20m);
+    }
+
+    [Fact]
     public async Task Batch_run_stores_forecast_run_and_results()
     {
         var store = SeedForecastableScenario([110m, 115m, 120m]);
@@ -201,6 +227,37 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
     }
 
     [Fact]
+    public async Task Forecast_engine_selects_rolling_windows_by_positional_shape_and_level()
+    {
+        var store = new FakeForecastDataStore();
+        store.Profiles.Add(Profile("target"));
+        AddHistory(store, "target", 1403, 8, [100m, 120m, 140m, 160m]);
+
+        store.Profiles.Add(Profile("good-candidate"));
+        AddHistory(store, "good-candidate", 1403, 8, [100m, 120m, 140m, 160m, 180m]);
+
+        store.Profiles.Add(Profile("bad-candidate"));
+        AddHistory(store, "bad-candidate", 1403, 8, [300m, 280m, 260m, 240m, 900m]);
+
+        var options = new ForecastEngineOptions
+        {
+            MinimumHistoryMonths = 4,
+            MaximumHistoryMonths = 12,
+            MinimumSimilarSubscribersTemperate = 1,
+            TopNSimilarSubscribers = 1,
+            MinimumCandidateSimilarity = 0m,
+            ConsumptionBandToleranceRatio = 10m
+        };
+
+        var result = await CreateEngine(store, options).ForecastAsync(new ForecastCustomerRequest("target", 1403, 8));
+
+        Assert.True(result.IsForecastable);
+        Assert.InRange(result.PredictedConsumption!.Value, 175m, 185m);
+        var similar = Assert.Single(store.Results.Single().SimilarSubscribers);
+        Assert.Equal("good-candidate", similar.SimilarBillIdentifier);
+    }
+
+    [Fact]
     public async Task Candidate_selection_filters_by_consumption_band()
     {
         var store = SeedForecastableScenario([110m, 112m, 114m]);
@@ -278,8 +335,7 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
 
         return new EnhancedSimilarPatternForecastEngine(
             store,
-            new ConsumptionSimilarityService(),
-            new TrendSimilarityService(),
+            new PositionalWindowSimilarityService(),
             new SeasonalSimilarityService(),
             new ProfileSimilarityService(),
             new GeographicSimilarityService(),
@@ -353,6 +409,16 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
         IsSmartReading = actual,
         DataQualityStatus = "Valid"
     };
+
+    private static IReadOnlyList<CustomerMonthlyConsumption> Window(string billIdentifier, int startYear, int startMonth, IReadOnlyList<decimal> values)
+    {
+        var startKey = ToMonthKey(startYear, startMonth);
+        return values.Select((value, index) =>
+        {
+            var (year, month) = FromMonthKey(startKey + index);
+            return Consumption(billIdentifier, year, month, value, actual: true);
+        }).ToList();
+    }
 
     private static int ToMonthKey(int year, int month) => year * 12 + month;
 

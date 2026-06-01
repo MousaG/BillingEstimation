@@ -8,6 +8,14 @@ public interface IConsumptionSimilarityService
     decimal Calculate(IReadOnlyList<CustomerMonthlyConsumption> targetHistory, IReadOnlyList<CustomerMonthlyConsumption> candidateHistory);
 }
 
+/// <summary>Compares aligned rolling windows by position rather than calendar month.</summary>
+public interface IPositionalWindowSimilarityService
+{
+    WindowSimilarityScore Calculate(IReadOnlyList<CustomerMonthlyConsumption> targetWindow, IReadOnlyList<CustomerMonthlyConsumption> candidateWindow);
+}
+
+public sealed record WindowSimilarityScore(decimal ConsumptionSimilarity, decimal TrendSimilarity);
+
 /// <summary>Compares month-to-month movement and slope.</summary>
 public interface ITrendSimilarityService
 {

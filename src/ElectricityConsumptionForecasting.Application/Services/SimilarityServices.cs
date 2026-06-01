@@ -47,15 +47,65 @@ public sealed class ConsumptionSimilarityService : IConsumptionSimilarityService
             yield break;
         }
 
-        var orderedCandidate = candidateHistory.OrderBy(x => x.Year).ThenBy(x => x.Month).ToList();
+    }
+
+    internal static decimal Clamp01(decimal value) => Math.Max(0m, Math.Min(1m, value));
+}
+
+public sealed class PositionalWindowSimilarityService : IPositionalWindowSimilarityService
+{
+    public WindowSimilarityScore Calculate(IReadOnlyList<CustomerMonthlyConsumption> targetWindow, IReadOnlyList<CustomerMonthlyConsumption> candidateWindow)
+    {
+        var pairs = PairByPosition(targetWindow, candidateWindow).ToList();
+        if (pairs.Count == 0)
+        {
+            return new WindowSimilarityScore(0m, 0m);
+        }
+
+        var averageDifference = pairs.Average(p =>
+        {
+            var denominator = Math.Max(Math.Abs(p.Target.Consumption), 1m);
+            return Math.Min(Math.Abs(p.Target.Consumption - p.Candidate.Consumption) / denominator, 1m);
+        });
+        var consumptionSimilarity = ConsumptionSimilarityService.Clamp01(1m - averageDifference);
+
+        if (pairs.Count < 2)
+        {
+            return new WindowSimilarityScore(consumptionSimilarity, 0.5m);
+        }
+
+        var matchingDirections = 0;
+        var slopeScores = new List<decimal>();
+        for (var i = 1; i < pairs.Count; i++)
+        {
+            var targetDelta = pairs[i].Target.Consumption - pairs[i - 1].Target.Consumption;
+            var candidateDelta = pairs[i].Candidate.Consumption - pairs[i - 1].Candidate.Consumption;
+            if (Math.Sign(targetDelta) == Math.Sign(candidateDelta))
+            {
+                matchingDirections++;
+            }
+
+            var denominator = Math.Max(Math.Abs(targetDelta), 1m);
+            slopeScores.Add(ConsumptionSimilarityService.Clamp01(1m - Math.Min(Math.Abs(targetDelta - candidateDelta) / denominator, 1m)));
+        }
+
+        var directionScore = (decimal)matchingDirections / (pairs.Count - 1);
+        var trendSimilarity = ConsumptionSimilarityService.Clamp01((directionScore + slopeScores.Average()) / 2m);
+        return new WindowSimilarityScore(consumptionSimilarity, trendSimilarity);
+    }
+
+    private static IEnumerable<(CustomerMonthlyConsumption Target, CustomerMonthlyConsumption Candidate)> PairByPosition(
+        IReadOnlyList<CustomerMonthlyConsumption> targetWindow,
+        IReadOnlyList<CustomerMonthlyConsumption> candidateWindow)
+    {
+        var orderedTarget = targetWindow.OrderBy(x => x.Year).ThenBy(x => x.Month).ToList();
+        var orderedCandidate = candidateWindow.OrderBy(x => x.Year).ThenBy(x => x.Month).ToList();
         var pairCount = Math.Min(orderedTarget.Count, orderedCandidate.Count);
         for (var i = 0; i < pairCount; i++)
         {
             yield return (orderedTarget[orderedTarget.Count - pairCount + i], orderedCandidate[orderedCandidate.Count - pairCount + i]);
         }
     }
-
-    internal static decimal Clamp01(decimal value) => Math.Max(0m, Math.Min(1m, value));
 }
 
 public sealed class TrendSimilarityService : ITrendSimilarityService

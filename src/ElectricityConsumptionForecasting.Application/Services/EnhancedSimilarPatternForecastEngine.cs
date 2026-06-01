@@ -10,8 +10,7 @@ namespace ElectricityConsumptionForecasting.Application.Services;
 public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatternForecastEngine
 {
     private readonly IForecastDataStore dataStore;
-    private readonly IConsumptionSimilarityService consumptionSimilarity;
-    private readonly ITrendSimilarityService trendSimilarity;
+    private readonly IPositionalWindowSimilarityService positionalWindowSimilarity;
     private readonly ISeasonalSimilarityService seasonalSimilarity;
     private readonly IProfileSimilarityService profileSimilarity;
     private readonly IGeographicSimilarityService geographicSimilarity;
@@ -23,8 +22,7 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
 
     public EnhancedSimilarPatternForecastEngine(
         IForecastDataStore dataStore,
-        IConsumptionSimilarityService consumptionSimilarity,
-        ITrendSimilarityService trendSimilarity,
+        IPositionalWindowSimilarityService positionalWindowSimilarity,
         ISeasonalSimilarityService seasonalSimilarity,
         IProfileSimilarityService profileSimilarity,
         IGeographicSimilarityService geographicSimilarity,
@@ -35,8 +33,7 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         IForecastRequestValidator requestValidator)
     {
         this.dataStore = dataStore;
-        this.consumptionSimilarity = consumptionSimilarity;
-        this.trendSimilarity = trendSimilarity;
+        this.positionalWindowSimilarity = positionalWindowSimilarity;
         this.seasonalSimilarity = seasonalSimilarity;
         this.profileSimilarity = profileSimilarity;
         this.geographicSimilarity = geographicSimilarity;
@@ -95,8 +92,9 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
                     .ThenBy(x => x.Month)
                     .TakeLast(window.History.Count)
                     .ToList();
-                var consumptionScore = consumptionSimilarity.Calculate(comparableTargetHistory, window.History);
-                var trendScore = trendSimilarity.Calculate(comparableTargetHistory, window.History);
+                var positionalScore = positionalWindowSimilarity.Calculate(comparableTargetHistory, window.History);
+                var consumptionScore = positionalScore.ConsumptionSimilarity;
+                var trendScore = positionalScore.TrendSimilarity;
                 var seasonalScore = seasonalSimilarity.Calculate(comparableTargetHistory, window.History, request.TargetMonth);
                 var profileScore = profileSimilarity.Calculate(profile, candidate);
                 var geographicScore = geographicSimilarity.Calculate(profile, candidate);
