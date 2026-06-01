@@ -16,6 +16,8 @@ public static class DependencyInjection
         services.AddScoped<ISeasonalSimilarityService, SeasonalSimilarityService>();
         services.AddScoped<IProfileSimilarityService, ProfileSimilarityService>();
         services.AddScoped<IGeographicSimilarityService, GeographicSimilarityService>();
+        services.AddScoped<IOutlierDetectionService, IqrOutlierDetectionService>();
+        services.AddScoped<IForecastConfidenceService, ForecastConfidenceService>();
         services.AddScoped<IEnhancedSimilarPatternForecastEngine, EnhancedSimilarPatternForecastEngine>();
         services.AddScoped<IForecastBatchService, ForecastBatchService>();
         services.AddScoped<IForecastQueryService, ForecastQueryService>();

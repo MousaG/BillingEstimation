@@ -1,6 +1,7 @@
 using ElectricityConsumptionForecasting.Application.Configuration;
 using ElectricityConsumptionForecasting.Application.Dtos;
 using ElectricityConsumptionForecasting.Application.Interfaces;
+using ElectricityConsumptionForecasting.Application.Models;
 using ElectricityConsumptionForecasting.Domain.Entities;
 using Microsoft.Extensions.Options;
 
@@ -15,6 +16,8 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
     private readonly ISeasonalSimilarityService seasonalSimilarity;
     private readonly IProfileSimilarityService profileSimilarity;
     private readonly IGeographicSimilarityService geographicSimilarity;
+    private readonly IOutlierDetectionService outlierDetection;
+    private readonly IForecastConfidenceService confidenceService;
     private readonly ForecastEngineOptions options;
 
     public EnhancedSimilarPatternForecastEngine(
@@ -24,6 +27,8 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         ISeasonalSimilarityService seasonalSimilarity,
         IProfileSimilarityService profileSimilarity,
         IGeographicSimilarityService geographicSimilarity,
+        IOutlierDetectionService outlierDetection,
+        IForecastConfidenceService confidenceService,
         IOptions<ForecastEngineOptions> options)
     {
         this.dataStore = dataStore;
@@ -32,6 +37,8 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         this.seasonalSimilarity = seasonalSimilarity;
         this.profileSimilarity = profileSimilarity;
         this.geographicSimilarity = geographicSimilarity;
+        this.outlierDetection = outlierDetection;
+        this.confidenceService = confidenceService;
         this.options = options.Value;
     }
 
@@ -77,10 +84,10 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
                 var geographicScore = geographicSimilarity.Calculate(profile, candidate);
                 var composite = Composite(consumptionScore, trendScore, seasonalScore, profileScore, geographicScore);
 
-                return new ScoredCandidate(candidate.BillIdentifier, composite, consumptionScore, trendScore, seasonalScore, profileScore, geographicScore, targetConsumption.Consumption);
+                return new ForecastCandidateScore(candidate.BillIdentifier, composite, consumptionScore, trendScore, seasonalScore, profileScore, geographicScore, targetConsumption.Consumption);
             })
             .Where(x => x is not null && x.SimilarityScore >= options.MinimumCandidateSimilarity)
-            .Cast<ScoredCandidate>()
+            .Cast<ForecastCandidateScore>()
             .OrderByDescending(x => x.SimilarityScore)
             .Take(options.TopNSimilarSubscribers)
             .ToList();
@@ -91,15 +98,18 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
             return await SaveAndReturnAsync(NotForecastable(request, "Not enough similar subscribers", "LOW_SIMILAR_COUNT", scored.Count), profile, runId, cancellationToken);
         }
 
-        var (withoutOutliers, outlierCount) = RemoveOutliers(scored);
+        var outlierResult = outlierDetection.RemoveOutliers(scored);
+        var withoutOutliers = outlierResult.IncludedCandidates;
+        var outlierCount = outlierResult.Outliers.Count;
         if (withoutOutliers.Count < minimumSimilar)
         {
-            return await SaveAndReturnAsync(NotForecastable(request, "Not enough similar subscribers after outlier removal", "LOW_SIMILAR_COUNT_AFTER_OUTLIERS", withoutOutliers.Count), profile, runId, cancellationToken, similarCandidates: scored, outliers: scored.Except(withoutOutliers).ToHashSet());
+            var response = NotForecastable(request, "Not enough similar subscribers after outlier removal", "LOW_SIMILAR_COUNT_AFTER_OUTLIERS", withoutOutliers.Count, outlierCount);
+            return await SaveAndReturnAsync(response, profile, runId, cancellationToken, similarCandidates: scored, outliers: outlierResult.Outliers);
         }
 
         var weightTotal = withoutOutliers.Sum(x => Math.Max(x.SimilarityScore, 0.01m));
         var predicted = withoutOutliers.Sum(x => x.TargetMonthConsumption * Math.Max(x.SimilarityScore, 0.01m)) / weightTotal;
-        var confidence = CalculateConfidence(withoutOutliers, targetHistory.Count, profile);
+        var confidence = confidenceService.Calculate(withoutOutliers, targetHistory, profile);
         var level = ConfidenceLevel(confidence);
         var warnings = ValidatePrediction(targetHistory, predicted);
         var requiresReview = confidence < options.MediumConfidenceThreshold || warnings.Any(x => x.Severity == "High");
@@ -113,13 +123,13 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
             withoutOutliers.Count,
             outlierCount,
             "EnhancedSimilarPattern",
-            confidence >= options.LowConfidenceThreshold,
-            requiresReview ? "Medium" : "Low",
+            confidence >= options.LowConfidenceThreshold && !warnings.Any(x => x.Severity == "High"),
+            RiskLevel(confidence, warnings),
             requiresReview,
             "Similar consumption pattern found in same climate, tariff, phase and consumption band",
             warnings);
 
-        return await SaveAndReturnAsync(forecastResponse, profile, runId, cancellationToken, similarCandidates: scored, outliers: scored.Except(withoutOutliers).ToHashSet());
+        return await SaveAndReturnAsync(forecastResponse, profile, runId, cancellationToken, similarCandidates: scored, outliers: outlierResult.Outliers);
     }
 
     private decimal Composite(decimal consumption, decimal trend, decimal seasonal, decimal profile, decimal geographic) =>
@@ -132,22 +142,20 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
     private int MinimumSimilarSubscribers(int climateType) =>
         climateType == 2 ? options.MinimumSimilarSubscribersTropical : options.MinimumSimilarSubscribersTemperate;
 
-    private decimal CalculateConfidence(IReadOnlyList<ScoredCandidate> candidates, int historyMonths, CustomerProfile profile)
-    {
-        var countScore = Math.Min((decimal)candidates.Count / MinimumSimilarSubscribers(profile.ClimateType), 1m);
-        var similarityScore = candidates.Average(x => x.SimilarityScore);
-        var mean = candidates.Average(x => x.TargetMonthConsumption);
-        var variance = candidates.Average(x => (x.TargetMonthConsumption - mean) * (x.TargetMonthConsumption - mean));
-        var coefficientOfVariation = mean == 0m ? 1m : (decimal)Math.Sqrt((double)variance) / mean;
-        var varianceScore = ConsumptionSimilarityService.Clamp01(1m - Math.Min(coefficientOfVariation, 1m));
-        var completenessScore = Math.Min((decimal)historyMonths / options.MaximumHistoryMonths, 1m);
-        return ConsumptionSimilarityService.Clamp01(countScore * 0.25m + similarityScore * 0.35m + varianceScore * 0.25m + completenessScore * 0.15m);
-    }
-
     private string ConfidenceLevel(decimal confidence) =>
         confidence >= options.HighConfidenceThreshold ? "High" :
         confidence >= options.MediumConfidenceThreshold ? "Medium" :
         confidence >= options.LowConfidenceThreshold ? "Low" : "VeryLow";
+
+    private string RiskLevel(decimal confidence, IReadOnlyCollection<ForecastWarningDto> warnings)
+    {
+        if (warnings.Any(x => x.Severity == "High") || confidence < options.LowConfidenceThreshold)
+        {
+            return "High";
+        }
+
+        return confidence < options.MediumConfidenceThreshold ? "Medium" : "Low";
+    }
 
     private IReadOnlyCollection<ForecastWarningDto> ValidatePrediction(IReadOnlyList<CustomerMonthlyConsumption> history, decimal predicted)
     {
@@ -171,43 +179,8 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         return warnings;
     }
 
-    private static (IReadOnlyList<ScoredCandidate> WithoutOutliers, int RemovedCount) RemoveOutliers(IReadOnlyList<ScoredCandidate> candidates)
-    {
-        if (candidates.Count < 4)
-        {
-            return (candidates, 0);
-        }
-
-        var ordered = candidates.Select(x => x.TargetMonthConsumption).Order().ToArray();
-        var q1 = Percentile(ordered, 0.25m);
-        var q3 = Percentile(ordered, 0.75m);
-        var iqr = q3 - q1;
-        var lower = q1 - 1.5m * iqr;
-        var upper = q3 + 1.5m * iqr;
-        var filtered = candidates.Where(x => x.TargetMonthConsumption >= lower && x.TargetMonthConsumption <= upper).ToList();
-        return (filtered, candidates.Count - filtered.Count);
-    }
-
-    private static decimal Percentile(decimal[] orderedValues, decimal percentile)
-    {
-        if (orderedValues.Length == 0)
-        {
-            return 0m;
-        }
-
-        var position = (orderedValues.Length - 1) * percentile;
-        var lower = (int)Math.Floor(position);
-        var upper = (int)Math.Ceiling(position);
-        if (lower == upper)
-        {
-            return orderedValues[lower];
-        }
-
-        return orderedValues[lower] + (orderedValues[upper] - orderedValues[lower]) * (position - lower);
-    }
-
-    private static ForecastResponse NotForecastable(ForecastCustomerRequest request, string reason, string warningCode, int similarCount = 0) =>
-        new(request.BillIdentifier, request.TargetYear, request.TargetMonth, null, 0m, "VeryLow", similarCount, 0, "EnhancedSimilarPattern", false, "High", true, reason, [new ForecastWarningDto(warningCode, reason, "High")]);
+    private static ForecastResponse NotForecastable(ForecastCustomerRequest request, string reason, string warningCode, int similarCount = 0, int outliersRemoved = 0) =>
+        new(request.BillIdentifier, request.TargetYear, request.TargetMonth, null, 0m, "VeryLow", similarCount, outliersRemoved, "EnhancedSimilarPattern", false, "High", true, reason, [new ForecastWarningDto(warningCode, reason, "High")]);
 
     private async Task<ForecastResponse> SaveAndReturnAsync(
         ForecastResponse response,
@@ -215,8 +188,8 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         long? runId,
         CancellationToken cancellationToken,
         decimal? actualConsumption = null,
-        IReadOnlyCollection<ScoredCandidate>? similarCandidates = null,
-        IReadOnlySet<ScoredCandidate>? outliers = null)
+        IReadOnlyCollection<ForecastCandidateScore>? similarCandidates = null,
+        IReadOnlySet<ForecastCandidateScore>? outliers = null)
     {
         var result = new ForecastResult
         {
@@ -264,13 +237,4 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         return response;
     }
 
-    private sealed record ScoredCandidate(
-        string BillIdentifier,
-        decimal SimilarityScore,
-        decimal ConsumptionSimilarity,
-        decimal TrendSimilarity,
-        decimal SeasonalSimilarity,
-        decimal ProfileSimilarity,
-        decimal GeographicSimilarity,
-        decimal TargetMonthConsumption);
 }

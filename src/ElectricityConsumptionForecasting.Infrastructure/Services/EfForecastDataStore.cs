@@ -19,6 +19,11 @@ public sealed class EfForecastDataStore : IForecastDataStore
     public Task<CustomerMonthlyConsumption?> GetActualConsumptionAsync(string billIdentifier, int year, int month, bool includeSmartReading, CancellationToken cancellationToken) =>
         dbContext.CustomerMonthlyConsumptions.AsNoTracking()
             .Where(x => x.BillIdentifier == billIdentifier && x.Year == year && x.Month == month && !x.HasCorrection && !x.HasMeterChange && x.DataQualityStatus == "Valid")
+            .Where(x => !dbContext.CustomerDataQualityIssues.Any(issue =>
+                issue.BillIdentifier == x.BillIdentifier &&
+                issue.Year == x.Year &&
+                issue.Month == x.Month &&
+                issue.Severity == "Severe"))
             .Where(x => x.IsActualReading || (includeSmartReading && x.IsSmartReading))
             .OrderByDescending(x => x.IsSmartReading)
             .FirstOrDefaultAsync(cancellationToken);
@@ -135,7 +140,12 @@ public sealed class EfForecastDataStore : IForecastDataStore
 
     private IQueryable<CustomerMonthlyConsumption> ValidConsumptions() =>
         dbContext.CustomerMonthlyConsumptions.AsNoTracking()
-            .Where(x => !x.HasCorrection && !x.HasMeterChange && x.DataQualityStatus == "Valid");
+            .Where(x => !x.HasCorrection && !x.HasMeterChange && x.DataQualityStatus == "Valid")
+            .Where(x => !dbContext.CustomerDataQualityIssues.Any(issue =>
+                issue.BillIdentifier == x.BillIdentifier &&
+                issue.Year == x.Year &&
+                issue.Month == x.Month &&
+                issue.Severity == "Severe"));
 
     private static int ToMonthKey(int year, int month) => year * 12 + month;
 }
