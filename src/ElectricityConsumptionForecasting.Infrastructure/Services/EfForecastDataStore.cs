@@ -55,25 +55,73 @@ public sealed class EfForecastDataStore : IForecastDataStore
             .GroupBy(x => x.BillIdentifier)
             .Select(g => new { BillIdentifier = g.Key, AverageConsumption = g.Average(x => x.Consumption) });
 
-        return await dbContext.CustomerProfiles.AsNoTracking()
+        var baseQuery = dbContext.CustomerProfiles.AsNoTracking()
             .Join(recentAverages, profile => profile.BillIdentifier, average => average.BillIdentifier, (profile, average) => new { Profile = profile, average.AverageConsumption })
             .Where(x => x.Profile.BillIdentifier != targetProfile.BillIdentifier)
             .Where(x => x.AverageConsumption >= lowerConsumption && x.AverageConsumption <= upperConsumption)
             .Where(x => x.Profile.CoCode == targetProfile.CoCode)
-            .Where(x => x.Profile.RegionCode == targetProfile.RegionCode)
-            .Where(x => !targetProfile.CityCode.HasValue || x.Profile.CityCode == targetProfile.CityCode)
             .Where(x => x.Profile.Phase == targetProfile.Phase)
             .Where(x => x.Profile.Ampere >= lowerAmpere && x.Profile.Ampere <= upperAmpere)
             .Where(x => x.Profile.MeterType == targetProfile.MeterType)
             .Select(x => x.Profile)
             .Where(x => x.ActivityStatus == "Active")
-            .Where(x => x.ClimateType == targetProfile.ClimateType && x.TariffType == targetProfile.TariffType)
+            .Where(x => x.ClimateType == targetProfile.ClimateType && x.TariffType == targetProfile.TariffType);
+
+        var selected = new List<CustomerProfile>();
+        var selectedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (targetProfile.CityCode.HasValue)
+        {
+            await AddCandidatesAsync(baseQuery.Where(x => x.CityCode == targetProfile.CityCode), targetProfile, selected, selectedIds, maxCandidates, cancellationToken);
+        }
+
+        if (selected.Count < maxCandidates)
+        {
+            await AddCandidatesAsync(baseQuery.Where(x => x.RegionCode == targetProfile.RegionCode), targetProfile, selected, selectedIds, maxCandidates, cancellationToken);
+        }
+
+        if (selected.Count < maxCandidates)
+        {
+            await AddCandidatesAsync(baseQuery, targetProfile, selected, selectedIds, maxCandidates, cancellationToken);
+        }
+
+        return selected;
+    }
+
+    private static async Task AddCandidatesAsync(
+        IQueryable<CustomerProfile> query,
+        CustomerProfile targetProfile,
+        List<CustomerProfile> selected,
+        HashSet<string> selectedIds,
+        int maxCandidates,
+        CancellationToken cancellationToken)
+    {
+        var remaining = maxCandidates - selected.Count;
+        if (remaining <= 0)
+        {
+            return;
+        }
+
+        var rows = await query
             .OrderByDescending(x => x.CityCode == targetProfile.CityCode)
             .ThenByDescending(x => x.RegionCode == targetProfile.RegionCode)
             .ThenByDescending(x => x.Phase == targetProfile.Phase)
             .ThenByDescending(x => x.MeterType == targetProfile.MeterType)
-            .Take(maxCandidates)
+            .Take(remaining * 2)
             .ToListAsync(cancellationToken);
+
+        foreach (var row in rows)
+        {
+            if (selected.Count >= maxCandidates)
+            {
+                return;
+            }
+
+            if (selectedIds.Add(row.BillIdentifier))
+            {
+                selected.Add(row);
+            }
+        }
     }
 
     public async Task<IReadOnlyDictionary<string, IReadOnlyList<CustomerMonthlyConsumption>>> GetValidHistoryForCustomersAsync(IEnumerable<string> billIdentifiers, int targetYear, int targetMonth, int maximumMonths, CancellationToken cancellationToken)

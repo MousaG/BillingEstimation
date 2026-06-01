@@ -8,4 +8,8 @@ public sealed record SimilarPatternWindow(
     decimal ComparableConsumption,
     int ComparableYear,
     int ComparableMonth,
+    int HistoryStartYear,
+    int HistoryStartMonth,
+    int HistoryEndYear,
+    int HistoryEndMonth,
     bool UsedActualForecastTargetMonth);

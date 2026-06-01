@@ -92,6 +92,12 @@ CREATE TABLE ForecastSimilarSubscribers (
     ProfileSimilarity decimal(5,4) NOT NULL,
     GeographicSimilarity decimal(5,4) NOT NULL,
     SimilarMonthConsumption decimal(18,3) NOT NULL,
+    ComparableYear int NOT NULL,
+    ComparableMonth int NOT NULL,
+    HistoryStartYear int NOT NULL,
+    HistoryStartMonth int NOT NULL,
+    HistoryEndYear int NOT NULL,
+    HistoryEndMonth int NOT NULL,
     [Weight] decimal(8,6) NOT NULL,
     IsOutlier bit NOT NULL
 );

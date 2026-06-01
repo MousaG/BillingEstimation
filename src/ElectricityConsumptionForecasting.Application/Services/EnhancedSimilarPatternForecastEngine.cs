@@ -81,22 +81,42 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
         var candidateIds = candidates.Select(x => x.BillIdentifier).ToArray();
         var histories = await dataStore.GetValidHistoryForCustomersAsync(candidateIds, request.TargetYear, request.TargetMonth, options.MaximumHistoryMonths, cancellationToken);
         var windows = windowProvider.BuildWindows(histories, request.TargetYear, request.TargetMonth, options.MinimumHistoryMonths);
+        var candidateLookup = candidates.ToDictionary(x => x.BillIdentifier);
 
-        var scored = candidates.Select(candidate =>
+        var scored = windows.Select(window =>
             {
-                if (!windows.TryGetValue(candidate.BillIdentifier, out var window) || window.UsedActualForecastTargetMonth)
+                if (window.UsedActualForecastTargetMonth || !candidateLookup.TryGetValue(window.BillIdentifier, out var candidate))
                 {
                     return null;
                 }
 
-                var consumptionScore = consumptionSimilarity.Calculate(targetHistory, window.History);
-                var trendScore = trendSimilarity.Calculate(targetHistory, window.History);
-                var seasonalScore = seasonalSimilarity.Calculate(targetHistory, window.History, request.TargetMonth);
+                var comparableTargetHistory = targetHistory
+                    .OrderBy(x => x.Year)
+                    .ThenBy(x => x.Month)
+                    .TakeLast(window.History.Count)
+                    .ToList();
+                var consumptionScore = consumptionSimilarity.Calculate(comparableTargetHistory, window.History);
+                var trendScore = trendSimilarity.Calculate(comparableTargetHistory, window.History);
+                var seasonalScore = seasonalSimilarity.Calculate(comparableTargetHistory, window.History, request.TargetMonth);
                 var profileScore = profileSimilarity.Calculate(profile, candidate);
                 var geographicScore = geographicSimilarity.Calculate(profile, candidate);
                 var composite = Composite(consumptionScore, trendScore, seasonalScore, profileScore, geographicScore, options);
 
-                return new ForecastCandidateScore(candidate.BillIdentifier, composite, consumptionScore, trendScore, seasonalScore, profileScore, geographicScore, window.ComparableConsumption);
+                return new ForecastCandidateScore(
+                    candidate.BillIdentifier,
+                    composite,
+                    consumptionScore,
+                    trendScore,
+                    seasonalScore,
+                    profileScore,
+                    geographicScore,
+                    window.ComparableConsumption,
+                    window.ComparableYear,
+                    window.ComparableMonth,
+                    window.HistoryStartYear,
+                    window.HistoryStartMonth,
+                    window.HistoryEndYear,
+                    window.HistoryEndMonth);
             })
             .Where(x => x is not null && x.SimilarityScore >= options.MinimumCandidateSimilarity)
             .Cast<ForecastCandidateScore>()
@@ -239,6 +259,12 @@ public sealed class EnhancedSimilarPatternForecastEngine : IEnhancedSimilarPatte
                     ProfileSimilarity = candidate.ProfileSimilarity,
                     GeographicSimilarity = candidate.GeographicSimilarity,
                     SimilarMonthConsumption = candidate.TargetMonthConsumption,
+                    ComparableYear = candidate.ComparableYear,
+                    ComparableMonth = candidate.ComparableMonth,
+                    HistoryStartYear = candidate.HistoryStartYear,
+                    HistoryStartMonth = candidate.HistoryStartMonth,
+                    HistoryEndYear = candidate.HistoryEndYear,
+                    HistoryEndMonth = candidate.HistoryEndMonth,
                     Weight = candidate.SimilarityScore,
                     IsOutlier = isOutlier
                 });

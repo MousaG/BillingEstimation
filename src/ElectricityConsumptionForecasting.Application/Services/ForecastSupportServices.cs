@@ -78,7 +78,7 @@ public sealed class ForecastConfidenceService : IForecastConfidenceService
 
 public sealed class SimilarPatternWindowProvider : ISimilarPatternWindowProvider
 {
-    public IReadOnlyDictionary<string, SimilarPatternWindow> BuildWindows(
+    public IReadOnlyList<SimilarPatternWindow> BuildWindows(
         IReadOnlyDictionary<string, IReadOnlyList<CustomerMonthlyConsumption>> candidateHistories,
         int targetYear,
         int targetMonth,
@@ -86,37 +86,68 @@ public sealed class SimilarPatternWindowProvider : ISimilarPatternWindowProvider
     {
         var targetKey = ToMonthKey(targetYear, targetMonth);
         return candidateHistories
-            .Select(x => BuildWindow(x.Key, x.Value, targetKey, targetMonth, minimumHistoryMonths))
-            .Where(x => x is not null)
-            .Cast<SimilarPatternWindow>()
-            .ToDictionary(x => x.BillIdentifier);
+            .SelectMany(x => BuildWindows(x.Key, x.Value, targetKey, minimumHistoryMonths))
+            .ToList();
     }
 
-    private static SimilarPatternWindow? BuildWindow(string billIdentifier, IReadOnlyList<CustomerMonthlyConsumption> history, int targetKey, int targetMonth, int minimumHistoryMonths)
+    private static IEnumerable<SimilarPatternWindow> BuildWindows(string billIdentifier, IReadOnlyList<CustomerMonthlyConsumption> history, int targetKey, int minimumHistoryMonths)
     {
         var ordered = history
             .Where(x => ToMonthKey(x.Year, x.Month) < targetKey)
             .OrderBy(x => x.Year)
             .ThenBy(x => x.Month)
             .ToList();
-        if (ordered.Count < minimumHistoryMonths)
+
+        for (var comparableIndex = minimumHistoryMonths; comparableIndex < ordered.Count; comparableIndex++)
         {
-            return null;
+            var comparable = ordered[comparableIndex];
+            var comparableKey = ToMonthKey(comparable.Year, comparable.Month);
+            if (comparableKey >= targetKey)
+            {
+                continue;
+            }
+
+            var windowHistory = ordered
+                .Skip(comparableIndex - minimumHistoryMonths)
+                .Take(minimumHistoryMonths)
+                .ToList();
+            if (!IsConsecutive(windowHistory, comparable))
+            {
+                continue;
+            }
+
+            var first = windowHistory.First();
+            var last = windowHistory.Last();
+            yield return new SimilarPatternWindow(
+                billIdentifier,
+                windowHistory,
+                comparable.Consumption,
+                comparable.Year,
+                comparable.Month,
+                first.Year,
+                first.Month,
+                last.Year,
+                last.Month,
+                comparableKey == targetKey);
+        }
+    }
+
+    private static bool IsConsecutive(IReadOnlyList<CustomerMonthlyConsumption> history, CustomerMonthlyConsumption comparable)
+    {
+        if (history.Count == 0)
+        {
+            return false;
         }
 
-        var comparable = ordered
-            .Where(x => x.Month == targetMonth)
-            .OrderByDescending(x => x.Year)
-            .ThenByDescending(x => x.Month)
-            .FirstOrDefault() ?? ordered.Last();
+        for (var i = 1; i < history.Count; i++)
+        {
+            if (ToMonthKey(history[i].Year, history[i].Month) != ToMonthKey(history[i - 1].Year, history[i - 1].Month) + 1)
+            {
+                return false;
+            }
+        }
 
-        return new SimilarPatternWindow(
-            billIdentifier,
-            ordered,
-            comparable.Consumption,
-            comparable.Year,
-            comparable.Month,
-            ToMonthKey(comparable.Year, comparable.Month) == targetKey);
+        return ToMonthKey(comparable.Year, comparable.Month) == ToMonthKey(history[^1].Year, history[^1].Month) + 1;
     }
 
     private static int ToMonthKey(int year, int month) => year * 12 + month;

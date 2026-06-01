@@ -39,7 +39,7 @@ public interface IForecastConfidenceService
 /// <summary>Builds historical similar-pattern windows without leaking unavailable target-month readings.</summary>
 public interface ISimilarPatternWindowProvider
 {
-    IReadOnlyDictionary<string, SimilarPatternWindow> BuildWindows(
+    IReadOnlyList<SimilarPatternWindow> BuildWindows(
         IReadOnlyDictionary<string, IReadOnlyList<CustomerMonthlyConsumption>> candidateHistories,
         int targetYear,
         int targetMonth,

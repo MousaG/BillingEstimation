@@ -26,13 +26,32 @@ public sealed class ConsumptionSimilarityService : IConsumptionSimilarityService
         IReadOnlyList<CustomerMonthlyConsumption> targetHistory,
         IReadOnlyList<CustomerMonthlyConsumption> candidateHistory)
     {
+        var orderedTarget = targetHistory.OrderBy(x => x.Year).ThenBy(x => x.Month).ToList();
         var candidateLookup = candidateHistory.ToDictionary(x => (x.Year, x.Month));
-        foreach (var target in targetHistory.OrderBy(x => x.Year).ThenBy(x => x.Month))
+        var calendarPairs = new List<(CustomerMonthlyConsumption Target, CustomerMonthlyConsumption Candidate)>();
+        foreach (var target in orderedTarget)
         {
             if (candidateLookup.TryGetValue((target.Year, target.Month), out var candidate))
             {
-                yield return (target, candidate);
+                calendarPairs.Add((target, candidate));
             }
+        }
+
+        if (calendarPairs.Count > 0)
+        {
+            foreach (var pair in calendarPairs)
+            {
+                yield return pair;
+            }
+
+            yield break;
+        }
+
+        var orderedCandidate = candidateHistory.OrderBy(x => x.Year).ThenBy(x => x.Month).ToList();
+        var pairCount = Math.Min(orderedTarget.Count, orderedCandidate.Count);
+        for (var i = 0; i < pairCount; i++)
+        {
+            yield return (orderedTarget[orderedTarget.Count - pairCount + i], orderedCandidate[orderedCandidate.Count - pairCount + i]);
         }
     }
 

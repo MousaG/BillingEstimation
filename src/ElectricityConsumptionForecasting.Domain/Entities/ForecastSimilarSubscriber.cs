@@ -13,6 +13,12 @@ public sealed class ForecastSimilarSubscriber
     public decimal ProfileSimilarity { get; set; }
     public decimal GeographicSimilarity { get; set; }
     public decimal SimilarMonthConsumption { get; set; }
+    public int ComparableYear { get; set; }
+    public int ComparableMonth { get; set; }
+    public int HistoryStartYear { get; set; }
+    public int HistoryStartMonth { get; set; }
+    public int HistoryEndYear { get; set; }
+    public int HistoryEndMonth { get; set; }
     public decimal Weight { get; set; }
     public bool IsOutlier { get; set; }
 }
