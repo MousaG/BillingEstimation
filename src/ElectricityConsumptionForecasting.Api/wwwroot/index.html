@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مدیریت پیش بینی مصرف</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">EC</span>
+      <div>
+        <h1>پیش بینی مصرف</h1>
+        <p>Enhanced Similar Pattern</p>
+      </div>
+    </div>
+    <nav class="nav" aria-label="بخش ها">
+      <button class="nav-item active" data-view="forecast">پیش بینی</button>
+      <button class="nav-item" data-view="sample">داده نمونه</button>
+      <button class="nav-item" data-view="batch">اجرای گروهی</button>
+      <button class="nav-item" data-view="dashboard">داشبورد</button>
+      <button class="nav-item" data-view="config">تنظیمات</button>
+    </nav>
+    <div class="connection">
+      <span class="dot"></span>
+      <span id="connectionText">آماده</span>
+    </div>
+  </aside>
+
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h2 id="viewTitle">پیش بینی مشترک</h2>
+        <p id="viewSubtitle">شناسه قبض و ماه هدف را وارد کنید.</p>
+      </div>
+      <button id="quickSeedButton" class="icon-button" title="ساخت نمونه سریع" aria-label="ساخت نمونه سریع">+</button>
+    </header>
+
+    <section class="view active" id="forecast">
+      <form class="panel form-grid" id="forecastForm">
+        <label>شناسه قبض<input name="billIdentifier" value="DEMO-TARGET" required></label>
+        <label>سال هدف<input name="targetYear" type="number" value="1403" required></label>
+        <label>ماه هدف<input name="targetMonth" type="number" min="1" max="12" value="8" required></label>
+        <label class="check"><input name="useSmartMeterIfAvailable" type="checkbox" checked> استفاده از قرائت هوشمند</label>
+        <button class="primary" type="submit">اجرای پیش بینی</button>
+      </form>
+      <div class="result-grid">
+        <article class="metric"><span>مصرف پیش بینی</span><strong id="predictedValue">-</strong></article>
+        <article class="metric"><span>اطمینان</span><strong id="confidenceValue">-</strong></article>
+        <article class="metric"><span>مشابه ها</span><strong id="similarValue">-</strong></article>
+        <article class="metric"><span>ریسک</span><strong id="riskValue">-</strong></article>
+      </div>
+      <pre id="forecastJson" class="json-output"></pre>
+    </section>
+
+    <section class="view" id="sample">
+      <form class="panel form-grid" id="sampleForm">
+        <label>شناسه هدف<input name="targetBillIdentifier" value="DEMO-TARGET" required></label>
+        <label>سال هدف<input name="targetYear" type="number" value="1403" required></label>
+        <label>ماه هدف<input name="targetMonth" type="number" min="1" max="12" value="8" required></label>
+        <label>کد شرکت<input name="coCode" type="number" value="1" required></label>
+        <label>کد منطقه<input name="regionCode" type="number" value="10" required></label>
+        <label>کد شهر<input name="cityCode" type="number" value="100"></label>
+        <label>تعرفه<input name="tariffType" type="number" value="1" required></label>
+        <label>اقلیم<input name="climateType" type="number" value="1" required></label>
+        <label>فاز<input name="phase" type="number" value="1" required></label>
+        <label>آمپر<input name="ampere" type="number" value="25" step="0.1" required></label>
+        <label>نوع کنتور<input name="meterType" type="number" value="1" required></label>
+        <label>تعداد مشابه<input name="candidateCount" type="number" min="20" max="200" value="24" required></label>
+        <button class="primary" type="submit">ایجاد داده نمونه</button>
+      </form>
+      <pre id="sampleJson" class="json-output"></pre>
+    </section>
+
+    <section class="view" id="batch">
+      <form class="panel form-grid" id="batchForm">
+        <label>کد شرکت<input name="coCode" type="number" value="1" required></label>
+        <label>سال هدف<input name="targetYear" type="number" value="1403" required></label>
+        <label>ماه هدف<input name="targetMonth" type="number" min="1" max="12" value="8" required></label>
+        <label>تعرفه<input name="tariffType" type="number" value="1"></label>
+        <label>حداکثر مشترک<input name="maxCustomers" type="number" value="50" required></label>
+        <button class="primary" type="submit">اجرای batch</button>
+      </form>
+      <pre id="batchJson" class="json-output"></pre>
+    </section>
+
+    <section class="view" id="dashboard">
+      <form class="panel form-grid" id="dashboardForm">
+        <label>کد شرکت<input name="coCode" type="number" value="1" required></label>
+        <label>سال هدف<input name="year" type="number" value="1403" required></label>
+        <label>ماه هدف<input name="month" type="number" min="1" max="12" value="8" required></label>
+        <button class="primary" type="submit">نمایش</button>
+      </form>
+      <div class="result-grid">
+        <article class="metric"><span>کل نتایج</span><strong id="totalResults">0</strong></article>
+        <article class="metric"><span>قابل پیش بینی</span><strong id="forecastableCount">0</strong></article>
+        <article class="metric"><span>نیازمند بررسی</span><strong id="expertReviewCount">0</strong></article>
+        <article class="metric"><span>میانگین اطمینان</span><strong id="averageConfidence">0</strong></article>
+      </div>
+      <pre id="dashboardJson" class="json-output"></pre>
+    </section>
+
+    <section class="view" id="config">
+      <form class="panel form-grid" id="featureForm">
+        <label>کد شرکت<input name="coCode" type="number" value="1" required></label>
+        <label>سال ویژگی<input name="featureYear" type="number" value="1403" required></label>
+        <label>ماه ویژگی<input name="featureMonth" type="number" min="1" max="12" value="8" required></label>
+        <label>حداکثر مشترک<input name="maximumCustomers" type="number" value="1000" required></label>
+        <button class="primary" type="submit">بازسازی ویژگی ها</button>
+      </form>
+      <form class="panel form-grid compact" id="configForm">
+        <label>نام تنظیم<input name="name" value="MinimumCandidateSimilarity" required></label>
+        <label>مقدار<input name="value" value="0.35" required></label>
+        <label>توضیح<input name="description" value="Override from dashboard"></label>
+        <label class="check"><input name="isActive" type="checkbox" checked> فعال</label>
+        <button class="primary" type="submit">ذخیره تنظیم</button>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>نام</th><th>مقدار</th><th>وضعیت</th><th>توضیح</th></tr></thead>
+          <tbody id="configRows"></tbody>
+        </table>
+      </div>
+      <pre id="configJson" class="json-output"></pre>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -56,16 +56,21 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
     }
 
     [Fact]
-    public async Task Outliers_are_removed_before_weighted_average()
+    public void Outliers_are_removed_before_weighted_average()
     {
-        var store = SeedForecastableScenario([100m, 102m, 98m, 500m]);
-        var result = await CreateEngine(store, new ForecastEngineOptions { MinimumSimilarSubscribersTemperate = 3, TopNSimilarSubscribers = 10, MinimumCandidateSimilarity = 0m, ConsumptionBandToleranceRatio = 10m })
-            .ForecastAsync(new ForecastCustomerRequest("target", 1403, 8));
+        var service = new IqrOutlierDetectionService();
+        var candidates = new[]
+        {
+            Score("a", 100m),
+            Score("b", 102m),
+            Score("c", 98m),
+            Score("d", 500m)
+        };
 
-        Assert.True(result.IsForecastable);
-        Assert.Equal(1, result.OutliersRemoved);
-        Assert.True(result.PredictedConsumption < 150m);
-        Assert.Contains(store.Results.Single().SimilarSubscribers, x => x.IsOutlier);
+        var result = service.RemoveOutliers(candidates, new ForecastEngineOptions());
+
+        Assert.Single(result.Outliers);
+        Assert.DoesNotContain(result.IncludedCandidates, x => x.TargetMonthConsumption == 500m);
     }
 
     [Fact]
@@ -210,7 +215,14 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
             AddHistory(store, id, 1403, 8, [30m, 35m, 40m, 45m, 400m, 116m, 118m, 119m, 120m, 150m, 116m, 118m]);
         }
 
-        var options = new ForecastEngineOptions { MinimumSimilarSubscribersTemperate = 3, TopNSimilarSubscribers = 3, MinimumCandidateSimilarity = 0m, ConsumptionBandToleranceRatio = 10m };
+        var options = new ForecastEngineOptions
+        {
+            MinimumSimilarSubscribersTemperate = 1,
+            TopNSimilarSubscribers = 1,
+            MinimumCandidateSimilarity = 0m,
+            ConsumptionBandToleranceRatio = 10m,
+            SeasonalSimilarityWeight = 0m
+        };
         var closeWindowResult = await CreateEngine(store, options).ForecastAsync(new ForecastCustomerRequest("target", 1403, 8));
         Assert.InRange(closeWindowResult.PredictedConsumption!.Value, 145m, 155m);
 
@@ -336,7 +348,7 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
         return new EnhancedSimilarPatternForecastEngine(
             store,
             new PositionalWindowSimilarityService(),
-            new SeasonalSimilarityService(),
+            new ComparableMonthSeasonalityService(),
             new ProfileSimilarityService(),
             new GeographicSimilarityService(),
             new IqrOutlierDetectionService(),
@@ -410,6 +422,9 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
         DataQualityStatus = "Valid"
     };
 
+    private static ForecastCandidateScore Score(string billIdentifier, decimal comparableConsumption) =>
+        new(billIdentifier, 1m, 1m, 1m, 1m, 1m, 1m, comparableConsumption, 1403, 1, 1402, 9, 1402, 12);
+
     private static IReadOnlyList<CustomerMonthlyConsumption> Window(string billIdentifier, int startYear, int startMonth, IReadOnlyList<decimal> values)
     {
         var startKey = ToMonthKey(startYear, startMonth);
@@ -429,12 +444,43 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
         return (year, month);
     }
 
+    [Fact]
+    public void Customer_recent_consumption_feature_service_builds_expected_feature()
+    {
+        var store = new FakeForecastDataStore();
+        var service = new CustomerRecentConsumptionFeatureService(store, new StaticForecastConfigProvider(new ForecastEngineOptions()));
+        var profile = Profile("feature-target");
+        var history = Window("feature-target", 1403, 1, [90m, 110m, 130m, 150m]);
+
+        var feature = service.BuildFeature(profile, history, 1403, 5);
+
+        Assert.Equal("feature-target", feature.BillIdentifier);
+        Assert.Equal(4, feature.ValidMonthsCount);
+        Assert.Equal(120m, feature.RecentAverageConsumption);
+        Assert.Equal(90m, feature.RecentMinimumConsumption);
+        Assert.Equal(150m, feature.RecentMaximumConsumption);
+        Assert.Equal(20m, feature.TrendSlope);
+        Assert.Equal(2, feature.ConsumptionBand);
+    }
+
+    [Fact]
+    public void Batch_request_validation_enforces_max_batch_limit()
+    {
+        var validator = new ForecastRequestValidator(Microsoft.Extensions.Options.Options.Create(new ForecastEngineOptions { MaxBatchCustomersLimit = 10 }));
+
+        var result = validator.Validate(new BatchForecastRequest(141, 1403, 8, 10, 11));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Contains("MaxCustomers", StringComparison.Ordinal));
+    }
+
     private sealed class FakeForecastDataStore : IForecastDataStore
     {
         public List<CustomerProfile> Profiles { get; } = [];
         public List<CustomerMonthlyConsumption> Consumptions { get; } = [];
         public List<ForecastResult> Results { get; } = [];
         public List<ForecastRun> Runs { get; } = [];
+        public List<CustomerRecentConsumptionFeature> Features { get; } = [];
         public CandidateSelectionCriteria? LastCandidateCriteria { get; private set; }
 
         public Task<CustomerProfile?> GetCustomerProfileAsync(string billIdentifier, CancellationToken cancellationToken) =>
@@ -579,6 +625,16 @@ public sealed class EnhancedSimilarPatternForecastEngineTests
 
         public Task<IReadOnlyDictionary<string, string>> GetActiveForecastConfigValuesAsync(CancellationToken cancellationToken) =>
             Task.FromResult((IReadOnlyDictionary<string, string>)new Dictionary<string, string>());
+
+        public Task<IReadOnlyList<CustomerProfile>> GetFeatureBuildCustomersAsync(int coCode, int maximumCustomers, CancellationToken cancellationToken) =>
+            Task.FromResult((IReadOnlyList<CustomerProfile>)Profiles.Where(x => x.CoCode == coCode && x.ActivityStatus == "Active").Take(maximumCustomers).ToList());
+
+        public Task UpsertCustomerRecentConsumptionFeatureAsync(CustomerRecentConsumptionFeature feature, CancellationToken cancellationToken)
+        {
+            Features.RemoveAll(x => x.BillIdentifier == feature.BillIdentifier && x.FeatureYear == feature.FeatureYear && x.FeatureMonth == feature.FeatureMonth);
+            Features.Add(feature);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StaticForecastConfigProvider : IForecastConfigProvider

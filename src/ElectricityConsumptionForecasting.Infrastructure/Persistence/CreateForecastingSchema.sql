@@ -132,6 +132,31 @@ CREATE TABLE CustomerDataQualityIssues (
     CreatedAt datetime2 NOT NULL
 );
 
+CREATE TABLE CustomerRecentConsumptionFeatures (
+    Id bigint IDENTITY(1,1) NOT NULL CONSTRAINT PK_CustomerRecentConsumptionFeatures PRIMARY KEY,
+    BillIdentifier nvarchar(32) NOT NULL,
+    FeatureYear int NOT NULL,
+    FeatureMonth int NOT NULL,
+    CoCode int NOT NULL,
+    RegionCode int NOT NULL,
+    CityCode int NULL,
+    TariffType int NOT NULL,
+    ClimateType int NOT NULL,
+    Phase int NOT NULL,
+    Ampere decimal(10,2) NOT NULL,
+    MeterType int NOT NULL,
+    ValidMonthsCount int NOT NULL,
+    RecentAverageConsumption decimal(18,3) NOT NULL,
+    RecentMinimumConsumption decimal(18,3) NOT NULL,
+    RecentMaximumConsumption decimal(18,3) NOT NULL,
+    RecentStdDevConsumption decimal(18,3) NOT NULL,
+    LastConsumption decimal(18,3) NOT NULL,
+    TrendSlope decimal(18,6) NOT NULL,
+    ConsumptionBand int NOT NULL,
+    CreatedAt datetime2 NOT NULL,
+    UpdatedAt datetime2 NOT NULL
+);
+
 CREATE UNIQUE INDEX IX_CustomerProfiles_BillIdentifier ON CustomerProfiles(BillIdentifier);
 CREATE INDEX IX_CustomerMonthlyConsumption_BillIdentifier_Year_Month ON CustomerMonthlyConsumptions(BillIdentifier, [Year], [Month]);
 CREATE INDEX IX_CustomerMonthlyConsumption_Year_Month_ReadingType_DataQualityStatus ON CustomerMonthlyConsumptions([Year], [Month], ReadingType, DataQualityStatus);
@@ -141,3 +166,6 @@ CREATE INDEX IX_ForecastResult_BillIdentifier_TargetYear_TargetMonth_IsLatest ON
 CREATE INDEX IX_ForecastResult_CoCode_TargetYear_TargetMonth_IsForecastable ON ForecastResults(CoCode, TargetYear, TargetMonth, IsForecastable);
 CREATE INDEX IX_ForecastSimilarSubscriber_ForecastResultId ON ForecastSimilarSubscribers(ForecastResultId);
 CREATE UNIQUE INDEX IX_ForecastConfigs_Name ON ForecastConfigs([Name]);
+CREATE UNIQUE INDEX IX_CustomerRecentConsumptionFeature_BillIdentifier_FeatureYear_FeatureMonth ON CustomerRecentConsumptionFeatures(BillIdentifier, FeatureYear, FeatureMonth);
+CREATE INDEX IX_CustomerRecentConsumptionFeature_GeoBand ON CustomerRecentConsumptionFeatures(FeatureYear, FeatureMonth, CoCode, ClimateType, TariffType, RegionCode, CityCode, ConsumptionBand);
+CREATE INDEX IX_CustomerRecentConsumptionFeature_Profile ON CustomerRecentConsumptionFeatures(FeatureYear, FeatureMonth, CoCode, ClimateType, TariffType, Phase, MeterType);
